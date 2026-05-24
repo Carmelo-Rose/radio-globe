@@ -17,7 +17,7 @@ export default function PlayerCard() {
   const setVolume = useRadio((s) => s.setVolume);
   const setPlaybackError = useRadio((s) => s.setPlaybackError);
 
-  const station = useRadio((s) => s.getStation(s.currentStationId ?? ""));
+  const station = useRadio((s) => s.stationMap.get(s.currentStationId ?? ""));
   const isFav = station ? favorites.has(station.id) : false;
   const audioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -33,7 +33,13 @@ export default function PlayerCard() {
     const a = audioRef.current;
     if (!a) return;
 
-    const cleanup = () => {
+    const onAudioError = () => {
+      setPlaybackError("流媒体连接失败");
+      useRadio.setState({ isPlaying: false });
+    };
+    a.addEventListener("error", onAudioError);
+
+    const destroyHls = () => {
       hlsRef.current?.destroy();
       hlsRef.current = null;
     };
@@ -41,14 +47,17 @@ export default function PlayerCard() {
     if (isPlaying && station?.streamUrl) {
       const url = station.streamUrl;
       const isHls = /\.m3u8/i.test(url);
-      cleanup();
+      destroyHls();
 
       if (isHls && Hls.isSupported()) {
         const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
         hls.loadSource(url);
         hls.attachMedia(a);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          a.play().catch(() => setPlaybackError("无法播放此电台"));
+          a.play().then(
+            () => setPlaybackError(null),
+            () => { setPlaybackError("无法播放此电台"); useRadio.setState({ isPlaying: false }); }
+          );
         });
         hls.on(Hls.Events.ERROR, (_, data) => {
           if (data.fatal) {
@@ -61,20 +70,24 @@ export default function PlayerCard() {
         hlsRef.current = hls;
       } else {
         a.src = url;
-        a.play().catch(() => setPlaybackError("无法播放此电台"));
+        a.play().then(
+          () => setPlaybackError(null),
+          () => { setPlaybackError("无法播放此电台"); useRadio.setState({ isPlaying: false }); }
+        );
       }
     } else {
       a.pause();
       a.src = "";
-      cleanup();
+      destroyHls();
     }
 
     return () => {
+      a.removeEventListener("error", onAudioError);
       a.pause();
       a.src = "";
-      cleanup();
+      destroyHls();
     };
-  }, [isPlaying, station?.streamUrl, station?.id]); // volume removed
+  }, [isPlaying, station?.streamUrl, station?.id]);
 
   if (!station) {
     return (

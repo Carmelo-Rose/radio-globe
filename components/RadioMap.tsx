@@ -48,7 +48,8 @@ export default function RadioMap() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const readyRef = useRef(false);
-  const skipAutoTuneRef = useRef(false);
+  const flyToActiveRef = useRef(false);
+  const flyToTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const currentId = useRadio((s) => s.currentStationId);
   const currentIdRef = useRef(currentId);
@@ -198,10 +199,7 @@ export default function RadioMap() {
 
       // moveend: only auto-tune nearest station from already-loaded data
       map.on("moveend", () => {
-        if (skipAutoTuneRef.current) {
-          skipAutoTuneRef.current = false;
-          return;
-        }
+        if (flyToActiveRef.current) return;
         const { stations } = useRadio.getState();
         if (stations.length === 0) return;
         const c = map.getCenter();
@@ -258,8 +256,13 @@ export default function RadioMap() {
     const { lastChange } = useRadio.getState();
     const st = useRadio.getState().getStation(currentId ?? "");
     if (st && lastChange === "select") {
-      skipAutoTuneRef.current = true;
+      flyToActiveRef.current = true;
+      if (flyToTimerRef.current) clearTimeout(flyToTimerRef.current);
       map.flyTo({ center: [st.lng, st.lat], zoom: Math.max(map.getZoom(), 4), essential: true });
+      // Reset after flyTo animation completes (max ~5s) + buffer
+      flyToTimerRef.current = setTimeout(() => {
+        flyToActiveRef.current = false;
+      }, 5500);
     }
   }, [currentId]);
 

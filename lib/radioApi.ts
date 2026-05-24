@@ -73,9 +73,13 @@ export async function fetchAllStations(): Promise<ApiStation[]> {
     for (let attempt = 0; attempt < Math.min(3, servers.length); attempt++) {
       const base = nextServer();
       try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 15000);
         const res = await fetch(`${base}/json/stations/search?${params}`, {
           headers: { "User-Agent": "RadioGlobe/0.1" },
+          signal: ctrl.signal,
         });
+        clearTimeout(timer);
         if (!res.ok) continue;
         page = await res.json();
         break;

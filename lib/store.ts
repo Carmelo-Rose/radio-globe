@@ -54,16 +54,20 @@ export const useRadio = create<RadioState>((set, get) => ({
   setCurrent: (id, source) => {
     const prev = get();
     if (id === prev.currentStationId) {
-      // Allow retry: clear error so playback effect re-triggers
-      if (prev.playbackError) set({ playbackError: null });
+      // Retry: stop then restart playback
+      set({ isPlaying: false, playbackError: null });
+      setTimeout(() => set({ isPlaying: true }), 50);
       return;
     }
-    set({ currentStationId: id, lastChange: source, playbackError: null });
+    set({ currentStationId: id, lastChange: source, isPlaying: true, playbackError: null });
   },
 
   togglePlay: () => {
-    if (!get().currentStationId) return; // no station, ignore
-    set((s) => ({ isPlaying: !s.isPlaying }));
+    if (!get().currentStationId) return;
+    set((s) => {
+      const next = !s.isPlaying;
+      return { isPlaying: next, playbackError: next ? s.playbackError : null };
+    });
   },
 
   next: () => {
@@ -71,7 +75,9 @@ export const useRadio = create<RadioState>((set, get) => ({
     if (stations.length === 0) return;
     const i = stations.findIndex((s) => s.id === currentStationId);
     const nextIdx = i < 0 ? 0 : (i + 1) % stations.length;
-    set({ currentStationId: stations[nextIdx].id, lastChange: "select", playbackError: null });
+    const id = stations[nextIdx].id;
+    if (id === currentStationId) return;
+    set({ currentStationId: id, lastChange: "select", isPlaying: true, playbackError: null });
   },
 
   prev: () => {
@@ -79,7 +85,9 @@ export const useRadio = create<RadioState>((set, get) => ({
     if (stations.length === 0) return;
     const i = stations.findIndex((s) => s.id === currentStationId);
     const prevIdx = i < 0 ? stations.length - 1 : (i - 1 + stations.length) % stations.length;
-    set({ currentStationId: stations[prevIdx].id, lastChange: "select", playbackError: null });
+    const id = stations[prevIdx].id;
+    if (id === currentStationId) return;
+    set({ currentStationId: id, lastChange: "select", isPlaying: true, playbackError: null });
   },
 
   toggleFavorite: (id) =>
@@ -106,10 +114,14 @@ export const useRadio = create<RadioState>((set, get) => ({
 
       set((prev) => {
         let currentStationId = prev.currentStationId;
+        // Validate current station still exists
+        if (currentStationId && !stationMap.has(currentStationId)) {
+          currentStationId = null;
+        }
         if (!currentStationId && stations.length > 0) {
           currentStationId = stations[0].id;
         }
-        return { stations, stationMap, isLoading: false, currentStationId };
+        return { stations, stationMap, isLoading: false, currentStationId, lastChange: "tune" as const };
       });
     } catch {
       set({ isLoading: false });

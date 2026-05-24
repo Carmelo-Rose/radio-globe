@@ -6,7 +6,7 @@ import { useRadio } from "@/lib/store";
 export default function InfoCard() {
   const currentId = useRadio((s) => s.currentStationId);
   const setShowList = useRadio((s) => s.setShowList);
-  const station = useRadio((s) => s.getStation(s.currentStationId ?? ""));
+  const station = useRadio((s) => s.stationMap.get(s.currentStationId ?? ""));
 
   const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
