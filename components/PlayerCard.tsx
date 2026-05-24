@@ -61,8 +61,9 @@ export default function PlayerCard() {
     };
 
     if (isPlaying && station?.streamUrl) {
-      const url = station.streamUrl;
-      const isHls = /\.m3u8/i.test(url);
+      const rawUrl = station.streamUrl;
+      const url = `/api/stream?url=${encodeURIComponent(rawUrl)}`;
+      const isHls = /\.m3u8/i.test(rawUrl);
       destroyHls();
 
       if (isHls && Hls.isSupported()) {
