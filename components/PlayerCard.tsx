@@ -21,13 +21,6 @@ export default function PlayerCard() {
   const isFav = station ? favorites.has(station.id) : false;
   const audioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
-  const skipCountRef = useRef(0);
-  const MAX_AUTO_SKIP = 5;
-
-  // Reset skip count when station changes
-  useEffect(() => {
-    skipCountRef.current = 0;
-  }, [currentStationId]);
 
   // Sync volume to audio element (separate from playback lifecycle)
   useEffect(() => {
@@ -35,23 +28,14 @@ export default function PlayerCard() {
     if (a) a.volume = volume;
   }, [volume]);
 
-  // Auto-skip helper
-  const autoSkip = () => {
-    if (skipCountRef.current < MAX_AUTO_SKIP) {
-      skipCountRef.current++;
-      setTimeout(() => useRadio.getState().next(), 800);
-    }
-  };
-
   // HLS / native playback
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
 
     const onAudioError = () => {
-      setPlaybackError("流媒体连接失败，自动跳转...");
+      setPlaybackError("流媒体连接失败");
       useRadio.setState({ isPlaying: false });
-      autoSkip();
     };
     a.addEventListener("error", onAudioError);
 
@@ -72,25 +56,24 @@ export default function PlayerCard() {
         hls.attachMedia(a);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           a.play().then(
-            () => { setPlaybackError(null); skipCountRef.current = 0; },
-            () => { setPlaybackError("无法播放，自动跳转..."); useRadio.setState({ isPlaying: false }); autoSkip(); }
+            () => setPlaybackError(null),
+            () => { setPlaybackError("无法播放此电台"); useRadio.setState({ isPlaying: false }); }
           );
         });
         hls.on(Hls.Events.ERROR, (_, data) => {
           if (data.fatal) {
-            setPlaybackError("流媒体连接失败，自动跳转...");
+            setPlaybackError("流媒体连接失败");
             useRadio.setState({ isPlaying: false });
             hls.destroy();
             hlsRef.current = null;
-            autoSkip();
           }
         });
         hlsRef.current = hls;
       } else {
         a.src = url;
         a.play().then(
-          () => { setPlaybackError(null); skipCountRef.current = 0; },
-          () => { setPlaybackError("无法播放，自动跳转..."); useRadio.setState({ isPlaying: false }); autoSkip(); }
+          () => setPlaybackError(null),
+          () => { setPlaybackError("无法播放此电台"); useRadio.setState({ isPlaying: false }); }
         );
       }
     } else {
