@@ -1,0 +1,196 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import Hls from "hls.js";
+import { useRadio } from "@/lib/store";
+
+export default function PlayerCard() {
+  const {
+    currentStationId,
+    isPlaying,
+    volume,
+    favorites,
+    playbackError,
+    togglePlay,
+    next,
+    prev,
+    toggleFavorite,
+    setVolume,
+    setPlaybackError,
+  } = useRadio();
+
+  const station = useRadio((s) => s.getStation(s.currentStationId ?? ""));
+  const isFav = station ? favorites.has(station.id) : false;
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const hlsRef = useRef<Hls | null>(null);
+
+  // HLS / native playback
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.volume = volume;
+
+    const cleanup = () => {
+      hlsRef.current?.destroy();
+      hlsRef.current = null;
+    };
+
+    if (isPlaying && station?.streamUrl) {
+      const url = station.streamUrl;
+      const isHls = url.includes(".m3u8");
+      cleanup();
+
+      if (isHls && Hls.isSupported()) {
+        const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hls.loadSource(url);
+        hls.attachMedia(a);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          a.play().catch(() => setPlaybackError("无法播放此电台"));
+        });
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) {
+            setPlaybackError("流媒体连接失败");
+            hls.destroy();
+            hlsRef.current = null;
+          }
+        });
+        hlsRef.current = hls;
+      } else {
+        a.src = url;
+        a.play().catch(() => setPlaybackError("无法播放此电台"));
+      }
+    } else {
+      a.pause();
+      a.src = "";
+      cleanup();
+    }
+
+    return cleanup;
+  }, [isPlaying, volume, station?.streamUrl, station?.id]);
+
+  if (!station) {
+    return (
+      <div className="card player">
+        <div className="head">
+          <div className="cover"><Wave /></div>
+          <div className="meta">
+            <div className="name">加载中...</div>
+            <div className="genre">正在获取电台数据</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card player">
+      <div className="head">
+        <div className="cover">
+          <Wave />
+        </div>
+        <div className="meta">
+          <div className="name" title={station.name}>
+            {station.name}
+          </div>
+          <div className="genre">
+            {playbackError ? (
+              <span style={{ color: "#e74c3c" }}>{playbackError}</span>
+            ) : (
+              <>{station.genre} · {isPlaying ? "播放中" : "已暂停"}</>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="controls">
+        <button className="icon-btn" onClick={prev} title="上一首" aria-label="上一首">
+          <Prev />
+        </button>
+        <button
+          className="icon-btn play"
+          onClick={togglePlay}
+          title={isPlaying ? "暂停" : "播放"}
+          aria-label={isPlaying ? "暂停" : "播放"}
+        >
+          {isPlaying ? <Pause /> : <Play />}
+        </button>
+        <button className="icon-btn" onClick={next} title="下一首" aria-label="下一首">
+          <Next />
+        </button>
+        <button
+          className={`icon-btn fav${isFav ? " active" : ""}`}
+          onClick={() => toggleFavorite(station.id)}
+          title="收藏"
+          aria-label="收藏"
+        >
+          <Heart filled={isFav} />
+        </button>
+        <div className="vol">
+          <Volume />
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={volume}
+            onChange={(e) => setVolume(parseFloat(e.target.value))}
+            aria-label="音量"
+          />
+        </div>
+      </div>
+
+      <audio ref={audioRef} preload="none" />
+    </div>
+  );
+}
+
+const S = { width: 20, height: 20, fill: "currentColor" } as const;
+function Play() {
+  return (
+    <svg viewBox="0 0 24 24" width={22} height={22} fill="currentColor">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+function Pause() {
+  return (
+    <svg viewBox="0 0 24 24" width={22} height={22} fill="currentColor">
+      <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
+    </svg>
+  );
+}
+function Prev() {
+  return (
+    <svg viewBox="0 0 24 24" {...S}>
+      <path d="M6 6h2v12H6zm3.5 6 8.5 6V6z" />
+    </svg>
+  );
+}
+function Next() {
+  return (
+    <svg viewBox="0 0 24 24" {...S}>
+      <path d="M16 6h2v12h-2zM6 6v12l8.5-6z" />
+    </svg>
+  );
+}
+function Heart({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" {...S} fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={2}>
+      <path d="M12 21s-7.5-4.6-10-9.2C.6 8.4 2.3 5 5.7 5c2 0 3.4 1.1 4.3 2.4C10.9 6.1 12.3 5 14.3 5 17.7 5 19.4 8.4 18 11.8 15.5 16.4 12 21 12 21z" />
+    </svg>
+  );
+}
+function Volume() {
+  return (
+    <svg viewBox="0 0 24 24" width={18} height={18} fill="currentColor">
+      <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z" />
+    </svg>
+  );
+}
+function Wave() {
+  return (
+    <svg viewBox="0 0 24 24" width={24} height={24} fill="currentColor">
+      <path d="M6 10h2v4H6zm4-4h2v12h-2zm4 2h2v8h-2zm4-1h2v10h-2z" />
+    </svg>
+  );
+}
