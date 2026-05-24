@@ -1,16 +1,59 @@
 "use client";
 
+import { useMemo, useState, useCallback, useEffect } from "react";
 import { useRadio } from "@/lib/store";
 
-export default function StationList() {
-  const { showList, setShowList, setCurrent, currentStationId, favorites, stations } = useRadio();
-  if (!showList) return null;
+const PAGE_SIZE = 100;
 
-  const sorted = [...stations].sort((a, b) => {
-    const fa = favorites.has(a.id) ? 0 : 1;
-    const fb = favorites.has(b.id) ? 0 : 1;
-    return fa - fb;
-  });
+export default function StationList() {
+  const showList = useRadio((s) => s.showList);
+  const setShowList = useRadio((s) => s.setShowList);
+  const setCurrent = useRadio((s) => s.setCurrent);
+  const currentStationId = useRadio((s) => s.currentStationId);
+  const favorites = useRadio((s) => s.favorites);
+  const stations = useRadio((s) => s.stations);
+
+  const [query, setQuery] = useState("");
+  const [debounced, setDebounced] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(query), 200);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const filtered = useMemo(() => {
+    const q = debounced.toLowerCase().trim();
+    let list = stations;
+    if (q) {
+      list = stations.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          s.city.toLowerCase().includes(q) ||
+          s.country.toLowerCase().includes(q) ||
+          s.genre.toLowerCase().includes(q)
+      );
+    }
+    // Sort: favorites first, then by name
+    return [...list].sort((a, b) => {
+      const fa = favorites.has(a.id) ? 0 : 1;
+      const fb = favorites.has(b.id) ? 0 : 1;
+      if (fa !== fb) return fa - fb;
+      return a.name.localeCompare(b.name);
+    });
+  }, [stations, favorites, debounced]);
+
+  const visible = filtered.slice(0, PAGE_SIZE);
+  const hasMore = filtered.length > PAGE_SIZE;
+
+  const handleSelect = useCallback(
+    (id: string) => {
+      setCurrent(id, "select");
+      setShowList(false);
+    },
+    [setCurrent, setShowList]
+  );
+
+  if (!showList) return null;
 
   return (
     <>
@@ -20,16 +63,21 @@ export default function StationList() {
           ×
         </button>
         <h2>所有电台</h2>
-        <div className="sub">共 {stations.length} 个 · 点击飞往该电台</div>
+        <div className="sub">共 {stations.length} 个 · {debounced ? `过滤 ${filtered.length} 个` : "搜索电台名/城市/国家"}</div>
+        <input
+          className="list-search"
+          type="text"
+          placeholder="搜索电台..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoFocus
+        />
         <div className="list-scroll">
-          {sorted.map((s) => (
+          {visible.map((s) => (
             <button
               key={s.id}
               className={`list-item${s.id === currentStationId ? " active" : ""}`}
-              onClick={() => {
-                setCurrent(s.id, "select");
-                setShowList(false);
-              }}
+              onClick={() => handleSelect(s.id)}
             >
               <span>
                 <span className="li-name">{s.name}</span>
@@ -40,6 +88,12 @@ export default function StationList() {
               {favorites.has(s.id) && <span className="li-star">★</span>}
             </button>
           ))}
+          {hasMore && (
+            <div className="list-more">还有 {filtered.length - PAGE_SIZE} 个电台，请搜索缩小范围</div>
+          )}
+          {filtered.length === 0 && debounced && (
+            <div className="list-more">没有找到匹配的电台</div>
+          )}
         </div>
       </div>
     </>

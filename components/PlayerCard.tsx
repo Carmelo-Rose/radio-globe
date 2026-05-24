@@ -1,34 +1,37 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import Hls from "hls.js";
 import { useRadio } from "@/lib/store";
 
 export default function PlayerCard() {
-  const {
-    currentStationId,
-    isPlaying,
-    volume,
-    favorites,
-    playbackError,
-    togglePlay,
-    next,
-    prev,
-    toggleFavorite,
-    setVolume,
-    setPlaybackError,
-  } = useRadio();
+  const currentStationId = useRadio((s) => s.currentStationId);
+  const isPlaying = useRadio((s) => s.isPlaying);
+  const volume = useRadio((s) => s.volume);
+  const favorites = useRadio((s) => s.favorites);
+  const playbackError = useRadio((s) => s.playbackError);
+  const togglePlay = useRadio((s) => s.togglePlay);
+  const next = useRadio((s) => s.next);
+  const prev = useRadio((s) => s.prev);
+  const toggleFavorite = useRadio((s) => s.toggleFavorite);
+  const setVolume = useRadio((s) => s.setVolume);
+  const setPlaybackError = useRadio((s) => s.setPlaybackError);
 
   const station = useRadio((s) => s.getStation(s.currentStationId ?? ""));
   const isFav = station ? favorites.has(station.id) : false;
   const audioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
 
+  // Sync volume to audio element (separate from playback lifecycle)
+  useEffect(() => {
+    const a = audioRef.current;
+    if (a) a.volume = volume;
+  }, [volume]);
+
   // HLS / native playback
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    a.volume = volume;
 
     const cleanup = () => {
       hlsRef.current?.destroy();
@@ -37,7 +40,7 @@ export default function PlayerCard() {
 
     if (isPlaying && station?.streamUrl) {
       const url = station.streamUrl;
-      const isHls = url.includes(".m3u8");
+      const isHls = /\.m3u8/i.test(url);
       cleanup();
 
       if (isHls && Hls.isSupported()) {
@@ -50,6 +53,7 @@ export default function PlayerCard() {
         hls.on(Hls.Events.ERROR, (_, data) => {
           if (data.fatal) {
             setPlaybackError("流媒体连接失败");
+            useRadio.setState({ isPlaying: false });
             hls.destroy();
             hlsRef.current = null;
           }
@@ -65,8 +69,12 @@ export default function PlayerCard() {
       cleanup();
     }
 
-    return cleanup;
-  }, [isPlaying, volume, station?.streamUrl, station?.id]);
+    return () => {
+      a.pause();
+      a.src = "";
+      cleanup();
+    };
+  }, [isPlaying, station?.streamUrl, station?.id]); // volume removed
 
   if (!station) {
     return (

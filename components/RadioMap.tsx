@@ -7,7 +7,6 @@ import { nearestStation } from "@/lib/geo";
 import { useRadio } from "@/lib/store";
 import { mapBridge } from "@/lib/mapBridge";
 
-// Empty collections used at init; populated dynamically on moveend
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
 function stationsToFC(stations: Station[]): GeoJSON.FeatureCollection {
@@ -49,6 +48,7 @@ export default function RadioMap() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const readyRef = useRef(false);
+  const skipAutoTuneRef = useRef(false);
 
   const currentId = useRadio((s) => s.currentStationId);
   const currentIdRef = useRef(currentId);
@@ -56,10 +56,11 @@ export default function RadioMap() {
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
+    let mounted = true;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      center: [116.4, 39.9], // Beijing default
+      center: [116.4, 39.9],
       zoom: 3.2,
       minZoom: 2.2,
       maxZoom: 18,
@@ -79,7 +80,6 @@ export default function RadioMap() {
             attribution:
               'Imagery © <a href="https://earthdata.nasa.gov/gibs">NASA EOSDIS GIBS</a> · Blue Marble',
           },
-          // ESRI 高清卫星：只在放大后（图层 minzoom）才加载，可一路看到房子
           esri: {
             type: "raster",
             tiles: [
@@ -94,7 +94,6 @@ export default function RadioMap() {
         layers: [
           { id: "space", type: "background", paint: { "background-color": "#0a1a3a" } },
           { id: "earth", type: "raster", source: "earth", paint: { "raster-saturation": -0.15 } },
-          // 放大到 5 级以上才渐显高清卫星，叠在地球贴图之上；远景不加载、不拖慢
           {
             id: "esri",
             type: "raster",
@@ -111,7 +110,7 @@ export default function RadioMap() {
     mapBridge.map = map;
     map.dragRotate.disable();
 
-    map.on("load", () => {
+    map.on("load", async () => {
       try {
         map.setProjection({ type: "globe" } as never);
       } catch {}
@@ -148,7 +147,6 @@ export default function RadioMap() {
       });
 
       map.addSource("stations", { type: "geojson", data: EMPTY_FC });
-
       map.addLayer({
         id: "station-glow",
         type: "circle",
@@ -157,8 +155,7 @@ export default function RadioMap() {
           "circle-radius": [
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            18,
-            10,
+            18, 10,
           ],
           "circle-color": "#1ed760",
           "circle-blur": 1,
@@ -173,14 +170,12 @@ export default function RadioMap() {
           "circle-radius": [
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            7,
-            4.5,
+            7, 4.5,
           ],
           "circle-color": [
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            "#ffffff",
-            "#1ed760",
+            "#ffffff", "#1ed760",
           ],
           "circle-stroke-width": 1.5,
           "circle-stroke-color": "rgba(255,255,255,0.85)",
@@ -201,34 +196,42 @@ export default function RadioMap() {
         map.on("mouseleave", lyr, () => (map.getCanvas().style.cursor = ""));
       }
 
-      // On moveend: fetch nearby stations and update map
-      map.on("moveend", async () => {
-        const c = map.getCenter();
-        const zoom = map.getZoom();
-        const distance = Math.max(30, Math.min(500, 600 / Math.pow(2, zoom / 3)));
-
-        await useRadio.getState().loadStations(c.lat, c.lng, distance);
-
+      // moveend: only auto-tune nearest station from already-loaded data
+      map.on("moveend", () => {
+        if (skipAutoTuneRef.current) {
+          skipAutoTuneRef.current = false;
+          return;
+        }
         const { stations } = useRadio.getState();
-        const stSrc = map.getSource("stations");
-        const amSrc = map.getSource("ambient");
-        if (stSrc && stSrc.type === "geojson") {
-          (stSrc as maplibregl.GeoJSONSource).setData(stationsToFC(stations));
-        }
-        if (amSrc && amSrc.type === "geojson") {
-          (amSrc as maplibregl.GeoJSONSource).setData(ambientDots(stations));
-        }
-
+        if (stations.length === 0) return;
+        const c = map.getCenter();
         const near = nearestStation(stations, c.lng, c.lat);
         if (near) useRadio.getState().setCurrent(near.id, "tune");
       });
 
-      // Trigger initial load
+      // Fetch ALL stations once
+      await useRadio.getState().fetchAll();
+      if (!mounted) return;
+
+      // Update map sources with all stations
+      const { stations } = useRadio.getState();
+      const stSrc = map.getSource("stations");
+      const amSrc = map.getSource("ambient");
+      if (stSrc && stSrc.type === "geojson") {
+        (stSrc as maplibregl.GeoJSONSource).setData(stationsToFC(stations));
+      }
+      if (amSrc && amSrc.type === "geojson") {
+        (amSrc as maplibregl.GeoJSONSource).setData(ambientDots(stations));
+      }
+
+      // Auto-tune nearest station
       const c = map.getCenter();
-      useRadio.getState().loadStations(c.lat, c.lng, 500);
+      const near = nearestStation(stations, c.lng, c.lat);
+      if (near) useRadio.getState().setCurrent(near.id, "tune");
     });
 
     return () => {
+      mounted = false;
       map.remove();
       mapRef.current = null;
       mapBridge.map = null;
@@ -243,27 +246,19 @@ export default function RadioMap() {
 
     const id = currentId ?? "";
     map.setPaintProperty("station-glow", "circle-radius", [
-      "case",
-      ["==", ["get", "id"], ["literal", id]],
-      18,
-      10,
+      "case", ["==", ["get", "id"], ["literal", id]], 18, 10,
     ]);
     map.setPaintProperty("station-core", "circle-radius", [
-      "case",
-      ["==", ["get", "id"], ["literal", id]],
-      7,
-      4.5,
+      "case", ["==", ["get", "id"], ["literal", id]], 7, 4.5,
     ]);
     map.setPaintProperty("station-core", "circle-color", [
-      "case",
-      ["==", ["get", "id"], ["literal", id]],
-      "#ffffff",
-      "#1ed760",
+      "case", ["==", ["get", "id"], ["literal", id]], "#ffffff", "#1ed760",
     ]);
 
     const { lastChange } = useRadio.getState();
     const st = useRadio.getState().getStation(currentId ?? "");
     if (st && lastChange === "select") {
+      skipAutoTuneRef.current = true;
       map.flyTo({ center: [st.lng, st.lat], zoom: Math.max(map.getZoom(), 4), essential: true });
     }
   }, [currentId]);

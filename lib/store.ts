@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Station } from "./stations";
-import { fetchStationsNearby, toStation } from "./radioApi";
+import { fetchAllStations, toStation } from "./radioApi";
 
 type RadioState = {
   currentStationId: string | null;
@@ -22,7 +22,7 @@ type RadioState = {
   toggleFavorite: (id: string) => void;
   setVolume: (v: number) => void;
   setShowList: (open: boolean) => void;
-  loadStations: (lat: number, lng: number, distance: number) => Promise<void>;
+  fetchAll: () => Promise<void>;
   getStation: (id: string) => Station | undefined;
   setPlaybackError: (msg: string | null) => void;
 };
@@ -52,26 +52,34 @@ export const useRadio = create<RadioState>((set, get) => ({
   playbackError: null,
 
   setCurrent: (id, source) => {
-    if (id === get().currentStationId) return;
+    const prev = get();
+    if (id === prev.currentStationId) {
+      // Allow retry: clear error so playback effect re-triggers
+      if (prev.playbackError) set({ playbackError: null });
+      return;
+    }
     set({ currentStationId: id, lastChange: source, playbackError: null });
   },
 
-  togglePlay: () => set((s) => ({ isPlaying: !s.isPlaying })),
+  togglePlay: () => {
+    if (!get().currentStationId) return; // no station, ignore
+    set((s) => ({ isPlaying: !s.isPlaying }));
+  },
 
   next: () => {
     const { stations, currentStationId } = get();
     if (stations.length === 0) return;
     const i = stations.findIndex((s) => s.id === currentStationId);
-    const nextStation = stations[(i + 1) % stations.length];
-    set({ currentStationId: nextStation.id, lastChange: "select", playbackError: null });
+    const nextIdx = i < 0 ? 0 : (i + 1) % stations.length;
+    set({ currentStationId: stations[nextIdx].id, lastChange: "select", playbackError: null });
   },
 
   prev: () => {
     const { stations, currentStationId } = get();
     if (stations.length === 0) return;
     const i = stations.findIndex((s) => s.id === currentStationId);
-    const prevStation = stations[(i - 1 + stations.length) % stations.length];
-    set({ currentStationId: prevStation.id, lastChange: "select", playbackError: null });
+    const prevIdx = i < 0 ? stations.length - 1 : (i - 1 + stations.length) % stations.length;
+    set({ currentStationId: stations[prevIdx].id, lastChange: "select", playbackError: null });
   },
 
   toggleFavorite: (id) =>
@@ -88,27 +96,19 @@ export const useRadio = create<RadioState>((set, get) => ({
 
   setPlaybackError: (msg) => set({ playbackError: msg }),
 
-  loadStations: async (lat, lng, distance) => {
+  fetchAll: async () => {
     if (get().isLoading) return;
     set({ isLoading: true });
     try {
-      const apiStations = await fetchStationsNearby(lat, lng, distance, 50);
-      const newStations = apiStations.map(toStation);
+      const apiStations = await fetchAllStations();
+      const stations = apiStations.map(toStation);
+      const stationMap = new Map(stations.map((s) => [s.id, s]));
 
       set((prev) => {
-        const merged = new Map(prev.stationMap);
-        for (const s of newStations) {
-          if (!merged.has(s.id)) merged.set(s.id, s);
-        }
-        const stations = Array.from(merged.values());
-        const stationMap = merged;
-
-        // Auto-select nearest if nothing selected
         let currentStationId = prev.currentStationId;
         if (!currentStationId && stations.length > 0) {
           currentStationId = stations[0].id;
         }
-
         return { stations, stationMap, isLoading: false, currentStationId };
       });
     } catch {
@@ -119,10 +119,15 @@ export const useRadio = create<RadioState>((set, get) => ({
 
 // Persist favorites to localStorage
 if (typeof window !== "undefined") {
-  useRadio.subscribe(
-    (state) => state.favorites,
-    (favorites) => {
-      localStorage.setItem("radio_favorites", JSON.stringify([...favorites]));
+  let prevFavs = useRadio.getState().favorites;
+  useRadio.subscribe((state) => {
+    if (state.favorites !== prevFavs) {
+      prevFavs = state.favorites;
+      try {
+        localStorage.setItem("radio_favorites", JSON.stringify([...state.favorites]));
+      } catch {
+        // QuotaExceededError — ignore
+      }
     }
-  );
+  });
 }

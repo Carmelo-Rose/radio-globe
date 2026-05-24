@@ -52,7 +52,53 @@ function nextServer(): string {
   return s;
 }
 
-// ---------- Fetch stations ----------
+// ---------- Fetch all stations (paginated) ----------
+
+export async function fetchAllStations(): Promise<ApiStation[]> {
+  await resolveServers();
+
+  const PAGE = 10000;
+  const all: ApiStation[] = [];
+
+  for (let offset = 0; ; offset += PAGE) {
+    const params = new URLSearchParams({
+      limit: String(PAGE),
+      offset: String(offset),
+      hidebroken: "true",
+      order: "clickcount",
+      reverse: "true",
+    });
+
+    let page: ApiStation[] | null = null;
+    for (let attempt = 0; attempt < Math.min(3, servers.length); attempt++) {
+      const base = nextServer();
+      try {
+        const res = await fetch(`${base}/json/stations/search?${params}`, {
+          headers: { "User-Agent": "RadioGlobe/0.1" },
+        });
+        if (!res.ok) continue;
+        page = await res.json();
+        break;
+      } catch {
+        continue;
+      }
+    }
+    if (!page || page.length === 0) break;
+    all.push(...page);
+    if (page.length < PAGE) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  return all.filter(
+    (s) =>
+      s.lastcheckok === 1 &&
+      s.geo_lat != null &&
+      s.geo_long != null &&
+      (s.url_resolved || s.url)
+  );
+}
+
+// ---------- Fetch nearby stations ----------
 
 export async function fetchStationsNearby(
   lat: number,
@@ -137,9 +183,9 @@ export function toStation(api: ApiStation): Station {
     name: api.name,
     city: api.state || api.countrycode || "未知",
     country: api.country || api.countrycode || "未知",
-    lng: api.geo_long!,
-    lat: api.geo_lat!,
-    timeZone: guessTimezone(api.geo_lat!, api.geo_long!),
+    lng: api.geo_long ?? 0,
+    lat: api.geo_lat ?? 0,
+    timeZone: guessTimezone(api.geo_lat ?? 0, api.geo_long ?? 0),
     genre: tags.slice(0, 2).join(", ") || "未知",
     streamUrl: api.url_resolved || api.url,
   };

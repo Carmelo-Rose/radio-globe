@@ -277,7 +277,27 @@ main {
 .list-panel .sub {
   font-size: 12px;
   color: var(--text-dim);
-  margin-bottom: 14px;
+  margin-bottom: 10px;
+}
+.list-search {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid rgba(20, 32, 26, 0.15);
+  border-radius: 10px;
+  font-size: 14px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.7);
+  margin-bottom: 10px;
+  transition: border-color 0.15s;
+}
+.list-search:focus {
+  border-color: var(--green);
+}
+.list-more {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 10px 0;
 }
 .list-scroll {
   overflow-y: auto;
