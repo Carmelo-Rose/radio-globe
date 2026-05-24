@@ -1,8 +1,37 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import Hls from "hls.js";
 import { useRadio } from "@/lib/store";
+
+function isAutoplayBlocked(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "NotAllowedError";
+}
+
+/** 尝试播放；被浏览器拦截时静音播放再立即恢复 */
+function safePlay(a: HTMLAudioElement): Promise<void> {
+  return a.play().catch((err) => {
+    if (!isAutoplayBlocked(err)) throw err;
+    // 静音绕过浏览器自动播放限制
+    const vol = a.volume;
+    const wasMuted = a.muted;
+    a.muted = true;
+    return a.play().finally(() => { a.muted = wasMuted; a.volume = vol; });
+  });
+}
+
+async function checkOffline(streamUrl: string): Promise<boolean> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`/api/stream?url=${encodeURIComponent(streamUrl)}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    const text = await res.text();
+    return text.includes("STREAM_OFFLINE");
+  } catch {
+    return false;
+  }
+}
 
 export default function PlayerCard() {
   const currentStationId = useRadio((s) => s.currentStationId);
@@ -21,12 +50,47 @@ export default function PlayerCard() {
   const isFav = station ? favorites.has(station.id) : false;
   const audioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const autoSkipRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearAutoSkip = useCallback(() => {
+    if (autoSkipRef.current) { clearTimeout(autoSkipRef.current); autoSkipRef.current = null; }
+  }, []);
+
+  // Schedule auto-skip for offline stations
+  const scheduleAutoSkip = useCallback(() => {
+    clearAutoSkip();
+    autoSkipRef.current = setTimeout(() => {
+      autoSkipRef.current = null;
+      useRadio.getState().next();
+    }, 5000);
+  }, [clearAutoSkip]);
+
+  // Cancel auto-skip when user interacts
+  const handleTogglePlay = useCallback(() => {
+    clearAutoSkip();
+    togglePlay();
+  }, [clearAutoSkip, togglePlay]);
+
+  const handlePrev = useCallback(() => {
+    clearAutoSkip();
+    prev();
+  }, [clearAutoSkip, prev]);
+
+  const handleNext = useCallback(() => {
+    clearAutoSkip();
+    next();
+  }, [clearAutoSkip, next]);
 
   // Sync volume
   useEffect(() => {
     const a = audioRef.current;
     if (a) a.volume = volume;
   }, [volume]);
+
+  // Clear auto-skip when station changes
+  useEffect(() => {
+    clearAutoSkip();
+  }, [station?.id, clearAutoSkip]);
 
   // Playback
   useEffect(() => {
@@ -36,17 +100,33 @@ export default function PlayerCard() {
     const MAX_RETRIES = 3;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let disposed = false;
+    let markFailedRunning = false;
+
+    const markFailed = async (streamUrl: string) => {
+      if (disposed || markFailedRunning) return;
+      markFailedRunning = true;
+      const offline = await checkOffline(streamUrl);
+      if (disposed) return;
+      if (offline) {
+        setPlaybackError({ type: "offline", message: "已停播" });
+        scheduleAutoSkip();
+      } else {
+        setPlaybackError({ type: "error", message: "播放失败" });
+      }
+      useRadio.setState({ isPlaying: false });
+    };
 
     const onAudioError = () => {
       if (disposed) return;
+      const rawUrl = useRadio.getState().stationMap.get(useRadio.getState().currentStationId ?? "")?.streamUrl;
       if (retries < MAX_RETRIES) {
         retries++;
+        if (retryTimer) clearTimeout(retryTimer);
         retryTimer = setTimeout(() => {
           if (!disposed && a.src) { a.load(); a.play().catch(() => {}); }
         }, 2000);
-      } else {
-        setPlaybackError("播放失败");
-        useRadio.setState({ isPlaying: false });
+      } else if (rawUrl) {
+        markFailed(rawUrl);
       }
     };
     a.addEventListener("error", onAudioError);
@@ -69,14 +149,9 @@ export default function PlayerCard() {
       hls.attachMedia(a);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         retries = 0;
-        a.play().then(
+        safePlay(a).then(
           () => setPlaybackError(null),
-          () => setTimeout(() => {
-            if (!disposed) a.play().then(
-              () => setPlaybackError(null),
-              () => { setPlaybackError("播放失败"); useRadio.setState({ isPlaying: false }); }
-            );
-          }, 1000)
+          () => { setPlaybackError({ type: "error", message: "播放失败" }); useRadio.setState({ isPlaying: false }); }
         );
       });
       hls.on(Hls.Events.ERROR, (_, data) => {
@@ -92,8 +167,7 @@ export default function PlayerCard() {
             }, 2000);
           }
         } else {
-          setPlaybackError("播放失败");
-          useRadio.setState({ isPlaying: false });
+          markFailed(streamUrl);
           hls.destroy(); hlsRef.current = null;
         }
       });
@@ -110,14 +184,9 @@ export default function PlayerCard() {
       } else {
         const proxied = `/api/stream?url=${encodeURIComponent(rawUrl)}`;
         a.src = proxied;
-        a.play().then(
+        safePlay(a).then(
           () => setPlaybackError(null),
-          () => setTimeout(() => {
-            if (!disposed) a.play().then(
-              () => setPlaybackError(null),
-              () => { setPlaybackError("播放失败"); useRadio.setState({ isPlaying: false }); }
-            );
-          }, 1000)
+          () => { setPlaybackError({ type: "error", message: "播放失败" }); useRadio.setState({ isPlaying: false }); }
         );
       }
     } else {
@@ -127,10 +196,11 @@ export default function PlayerCard() {
     return () => {
       disposed = true;
       if (retryTimer) clearTimeout(retryTimer);
+      clearAutoSkip();
       a.removeEventListener("error", onAudioError);
       a.pause(); a.src = ""; destroyHls();
     };
-  }, [isPlaying, station?.streamUrl, station?.id]);
+  }, [isPlaying, station?.streamUrl, station?.id, scheduleAutoSkip, setPlaybackError, clearAutoSkip]);
 
   if (!station) {
     return (
@@ -147,11 +217,11 @@ export default function PlayerCard() {
   }
 
   const statusText = playbackError
-    ? playbackError
+    ? playbackError.message
     : isPlaying
       ? "播放中"
       : "已暂停";
-  const statusColor = playbackError ? "#e74c3c" : undefined;
+  const statusColor = playbackError?.type === "offline" ? "#999" : playbackError ? "#e74c3c" : undefined;
 
   return (
     <div className="card player">
@@ -168,11 +238,11 @@ export default function PlayerCard() {
       </div>
 
       <div className="controls">
-        <button className="icon-btn" onClick={prev} title="上一首" aria-label="上一首"><Prev /></button>
-        <button className="icon-btn play" onClick={togglePlay} title={isPlaying ? "暂停" : "播放"} aria-label={isPlaying ? "暂停" : "播放"}>
+        <button className="icon-btn" onClick={handlePrev} title="上一首" aria-label="上一首"><Prev /></button>
+        <button className="icon-btn play" onClick={handleTogglePlay} title={isPlaying ? "暂停" : "播放"} aria-label={isPlaying ? "暂停" : "播放"}>
           {isPlaying ? <Pause /> : <Play />}
         </button>
-        <button className="icon-btn" onClick={next} title="下一首" aria-label="下一首"><Next /></button>
+        <button className="icon-btn" onClick={handleNext} title="下一首" aria-label="下一首"><Next /></button>
         <button className={`icon-btn fav${isFav ? " active" : ""}`} onClick={() => toggleFavorite(station.id)} title="收藏" aria-label="收藏">
           <Heart filled={isFav} />
         </button>

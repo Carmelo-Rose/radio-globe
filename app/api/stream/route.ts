@@ -41,6 +41,14 @@ export async function GET(req: NextRequest) {
 
     const contentType = upstream.headers.get("content-type") || "application/octet-stream";
 
+    // Detect offline streams: server returns HTML instead of audio
+    if (contentType.includes("text/html")) {
+      return new Response("STREAM_OFFLINE", {
+        status: 502,
+        headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" },
+      });
+    }
+
     // For HLS manifests, rewrite segment URLs to go through proxy
     if (contentType.includes("mpegurl") || contentType.includes("m3u8") || url.endsWith(".m3u8")) {
       const text = await upstream.text();

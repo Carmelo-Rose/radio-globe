@@ -145,12 +145,12 @@ export default function RadioMap() {
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
             6,
-            ["interpolate", ["linear"], ["zoom"], 2, 2.2, 6, 3.2],
+            ["interpolate", ["linear"], ["zoom"], 2, 2.8, 6, 4],
           ],
           "circle-color": [
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            "#ffffff", "#2be06a",
+            "#ffffff", "#39ee78",
           ],
           "circle-stroke-width": [
             "case",
@@ -227,10 +227,10 @@ export default function RadioMap() {
       "case",
       ["==", ["get", "id"], ["literal", id]],
       6,
-      ["interpolate", ["linear"], ["zoom"], 2, 2.2, 6, 3.2],
+      ["interpolate", ["linear"], ["zoom"], 2, 2.8, 6, 4],
     ]);
     map.setPaintProperty("station-core", "circle-color", [
-      "case", ["==", ["get", "id"], ["literal", id]], "#ffffff", "#2be06a",
+      "case", ["==", ["get", "id"], ["literal", id]], "#ffffff", "#39ee78",
     ]);
     map.setPaintProperty("station-core", "circle-stroke-width", [
       "case", ["==", ["get", "id"], ["literal", id]], 2, 0,

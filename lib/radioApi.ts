@@ -1,4 +1,5 @@
 import type { Station } from "./stations";
+import { matchCity, cityJitter } from "./cnGeo";
 
 export type ApiStation = {
   stationuuid: string;
@@ -148,6 +149,80 @@ export async function fetchStationsNearby(
     }
   }
   return [];
+}
+
+// ---------- Fetch China stations (real, with city geo) ----------
+
+/**
+ * 拉取中国电台（流均经 hidebroken 校验可播放），并用台名里的城市补真实坐标。
+ * radio-browser 的中国台大多没有 geo/state，所以靠"台名含城市"匹配 CN_CITIES。
+ * 已自带坐标的台则直接用其真实坐标。
+ */
+export async function fetchChinaStations(): Promise<Station[]> {
+  await resolveServers();
+
+  const params = new URLSearchParams({
+    countrycode: "CN",
+    hidebroken: "true",
+    order: "clickcount",
+    reverse: "true",
+    limit: "1000",
+  });
+
+  let data: ApiStation[] = [];
+  for (let attempt = 0; attempt < Math.min(3, servers.length); attempt++) {
+    const base = nextServer();
+    try {
+      const res = await fetch(`${base}/json/stations/search?${params}`);
+      if (!res.ok) continue;
+      data = await res.json();
+      break;
+    } catch {
+      continue;
+    }
+  }
+
+  const out: Station[] = [];
+  for (const s of data) {
+    if (s.lastcheckok !== 1) continue;
+    const stream = s.url_resolved || s.url;
+    if (!stream) continue;
+
+    let lng: number;
+    let lat: number;
+    let city: string;
+
+    if (s.geo_lat != null && s.geo_long != null) {
+      // 自带真实坐标
+      lng = s.geo_long;
+      lat = s.geo_lat;
+      city = s.state || "中国";
+    } else {
+      // 用台名里的城市定位；定位不到就跳过（不放假点）
+      const m = matchCity(s.name);
+      if (!m) continue;
+      const [dx, dy] = cityJitter(s.stationuuid);
+      lng = m.lng + dx;
+      lat = m.lat + dy;
+      city = m.city;
+    }
+
+    const tags = s.tags
+      ? s.tags.split(",").map((t) => t.trim()).filter(Boolean)
+      : [];
+    out.push({
+      id: s.stationuuid,
+      name: s.name,
+      city,
+      country: "中国",
+      lng,
+      lat,
+      timeZone: "Asia/Shanghai",
+      genre: tags.slice(0, 2).join(", ") || "综合",
+      streamUrl: stream,
+    });
+  }
+  return out;
 }
 
 // ---------- Timezone approximation ----------

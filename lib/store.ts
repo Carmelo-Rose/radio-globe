@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Station } from "./stations";
-import { fetchAllStationsPages, toStation } from "./radioApi";
+import { fetchAllStationsPages, fetchChinaStations, toStation } from "./radioApi";
 
 const CACHE_KEY = "radio_stations_cache";
 const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
@@ -186,6 +186,26 @@ export const useRadio = create<RadioState>((set, get) => ({
     try {
       const allStations: Station[] = [];
       let pageCount = 0;
+
+      // 2a. 先补充中国电台（真实城市定位 + 可播放流），让中国区域立刻变密
+      try {
+        const cn = await fetchChinaStations();
+        if (cn.length > 0) {
+          allStations.push(...cn);
+          set((prev) => {
+            const merged = new Map(prev.stationMap);
+            for (const s of cn) merged.set(s.id, s);
+            const stations = Array.from(merged.values());
+            return {
+              ...applyStations(prev, stations),
+              isCached: false,
+              loadProgress: `已加载 ${stations.length} 个电台...`,
+            };
+          });
+        }
+      } catch {
+        /* 中国数据失败不影响全球加载 */
+      }
 
       for await (const page of fetchAllStationsPages()) {
         pageCount++;
