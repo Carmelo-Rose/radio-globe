@@ -52,13 +52,27 @@ function nextServer(): string {
   return s;
 }
 
-// ---------- Fetch all stations (paginated) ----------
+// ---------- Fetch all stations (progressive) ----------
+
+const STATION_FILTER = (s: ApiStation) =>
+  s.lastcheckok === 1 &&
+  s.geo_lat != null &&
+  s.geo_long != null &&
+  (s.url_resolved || s.url);
 
 export async function fetchAllStations(): Promise<ApiStation[]> {
+  const pages: ApiStation[][] = [];
+  for await (const page of fetchAllStationsPages()) {
+    pages.push(page);
+  }
+  return pages.flat();
+}
+
+/** Async generator: yields one filtered page at a time for progressive rendering */
+export async function* fetchAllStationsPages(): AsyncGenerator<ApiStation[]> {
   await resolveServers();
 
   const PAGE = 10000;
-  const all: ApiStation[] = [];
 
   for (let offset = 0; ; offset += PAGE) {
     const params = new URLSearchParams({
@@ -88,18 +102,10 @@ export async function fetchAllStations(): Promise<ApiStation[]> {
       }
     }
     if (!page || page.length === 0) break;
-    all.push(...page);
+    yield page.filter(STATION_FILTER);
     if (page.length < PAGE) break;
     await new Promise((r) => setTimeout(r, 100));
   }
-
-  return all.filter(
-    (s) =>
-      s.lastcheckok === 1 &&
-      s.geo_lat != null &&
-      s.geo_long != null &&
-      (s.url_resolved || s.url)
-  );
 }
 
 // ---------- Fetch nearby stations ----------

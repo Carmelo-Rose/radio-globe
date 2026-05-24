@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import type { Station } from "./stations";
-import { fetchAllStations, toStation } from "./radioApi";
+import { fetchAllStationsPages, toStation } from "./radioApi";
+
+const CACHE_KEY = "radio_stations_cache";
+const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 
 type RadioState = {
   currentStationId: string | null;
@@ -13,6 +16,8 @@ type RadioState = {
   stations: Station[];
   stationMap: Map<string, Station>;
   isLoading: boolean;
+  isCached: boolean;
+  loadProgress: string;
   playbackError: string | null;
 
   setCurrent: (id: string | null, source: "tune" | "select") => void;
@@ -27,7 +32,51 @@ type RadioState = {
   setPlaybackError: (msg: string | null) => void;
 };
 
-// Hydrate favorites from localStorage
+// ---------- IndexedDB cache ----------
+
+function openDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("RadioGlobe", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("cache");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function loadCachedStations(): Promise<Station[] | null> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction("cache", "readonly");
+      const store = tx.objectStore("cache");
+      const req = store.get(CACHE_KEY);
+      req.onsuccess = () => {
+        const entry = req.result as { data: Station[]; ts: number } | undefined;
+        if (entry && Date.now() - entry.ts < CACHE_TTL) {
+          resolve(entry.data);
+        } else {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function saveCachedStations(stations: Station[]): Promise<void> {
+  try {
+    const db = await openDB();
+    const tx = db.transaction("cache", "readwrite");
+    tx.objectStore("cache").put({ data: stations, ts: Date.now() }, CACHE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+// ---------- Hydrate favorites ----------
+
 function loadFavorites(): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
@@ -36,6 +85,20 @@ function loadFavorites(): Set<string> {
   } catch {
     return new Set();
   }
+}
+
+// ---------- Store ----------
+
+function applyStations(prev: RadioState, stations: Station[]): Partial<RadioState> {
+  const stationMap = new Map(stations.map((s) => [s.id, s]));
+  let currentStationId = prev.currentStationId;
+  if (currentStationId && !stationMap.has(currentStationId)) {
+    currentStationId = null;
+  }
+  if (!currentStationId && stations.length > 0) {
+    currentStationId = stations[0].id;
+  }
+  return { stations, stationMap, currentStationId, lastChange: "tune" as const };
 }
 
 export const useRadio = create<RadioState>((set, get) => ({
@@ -49,12 +112,13 @@ export const useRadio = create<RadioState>((set, get) => ({
   stations: [],
   stationMap: new Map(),
   isLoading: false,
+  isCached: false,
+  loadProgress: "",
   playbackError: null,
 
   setCurrent: (id, source) => {
     const prev = get();
     if (id === prev.currentStationId) {
-      // Retry: stop then restart playback
       set({ isPlaying: false, playbackError: null });
       setTimeout(() => set({ isPlaying: true }), 50);
       return;
@@ -106,25 +170,55 @@ export const useRadio = create<RadioState>((set, get) => ({
 
   fetchAll: async () => {
     if (get().isLoading) return;
-    set({ isLoading: true });
-    try {
-      const apiStations = await fetchAllStations();
-      const stations = apiStations.map(toStation);
-      const stationMap = new Map(stations.map((s) => [s.id, s]));
+    set({ isLoading: true, loadProgress: "加载中..." });
 
-      set((prev) => {
-        let currentStationId = prev.currentStationId;
-        // Validate current station still exists
-        if (currentStationId && !stationMap.has(currentStationId)) {
-          currentStationId = null;
-        }
-        if (!currentStationId && stations.length > 0) {
-          currentStationId = stations[0].id;
-        }
-        return { stations, stationMap, isLoading: false, currentStationId, lastChange: "tune" as const };
-      });
+    // 1. Load cached data first (instant)
+    const cached = await loadCachedStations();
+    if (cached && cached.length > 0 && get().stations.length === 0) {
+      set((prev) => ({
+        ...applyStations(prev, cached),
+        isCached: true,
+        loadProgress: `已加载 ${cached.length} 个缓存电台`,
+      }));
+    }
+
+    // 2. Fetch fresh data progressively
+    try {
+      const allStations: Station[] = [];
+      let pageCount = 0;
+
+      for await (const page of fetchAllStationsPages()) {
+        pageCount++;
+        const newStations = page.map(toStation);
+        allStations.push(...newStations);
+
+        // Update store with cumulative data (merge with existing)
+        set((prev) => {
+          const merged = new Map(prev.stationMap);
+          for (const s of newStations) {
+            if (!merged.has(s.id)) merged.set(s.id, s);
+          }
+          const stations = Array.from(merged.values());
+          return {
+            ...applyStations(prev, stations),
+            isCached: false,
+            loadProgress: `已加载 ${stations.length} 个电台...`,
+          };
+        });
+      }
+
+      // 3. Cache the result
+      if (allStations.length > 0) {
+        const finalStations = get().stations;
+        saveCachedStations(finalStations);
+      }
+
+      set({ isLoading: false, loadProgress: "" });
     } catch {
-      set({ isLoading: false });
+      set((s) => ({
+        isLoading: false,
+        loadProgress: s.stations.length > 0 ? "" : "加载失败，请刷新重试",
+      }));
     }
   },
 }));

@@ -7,6 +7,7 @@ export default function InfoCard() {
   const currentId = useRadio((s) => s.currentStationId);
   const setShowList = useRadio((s) => s.setShowList);
   const station = useRadio((s) => s.stationMap.get(s.currentStationId ?? ""));
+  const loadProgress = useRadio((s) => s.loadProgress);
 
   const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
@@ -30,7 +31,7 @@ export default function InfoCard() {
     <div className="card info-card">
       <div>
         <div className="city">{station?.city ?? "旋转地球"}</div>
-        <div className="country">{station?.country ?? "探索电台"}</div>
+        <div className="country">{loadProgress || (station?.country ?? "探索电台")}</div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <div>

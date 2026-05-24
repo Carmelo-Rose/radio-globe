@@ -20,40 +20,20 @@ function stationsToFC(stations: Station[]): GeoJSON.FeatureCollection {
   };
 }
 
-function ambientDots(stations: Station[]): GeoJSON.FeatureCollection {
-  const capped = stations.slice(0, 60);
-  return {
-    type: "FeatureCollection",
-    features: capped.flatMap((s) =>
-      Array.from({ length: 48 }, () => {
-        const r = Math.pow(Math.random(), 0.6) * 13;
-        const a = Math.random() * Math.PI * 2;
-        return {
-          type: "Feature" as const,
-          geometry: {
-            type: "Point" as const,
-            coordinates: [
-              s.lng + (Math.cos(a) * r) / Math.cos((s.lat * Math.PI) / 180),
-              Math.max(-83, Math.min(83, s.lat + Math.sin(a) * r)),
-            ],
-          },
-          properties: {},
-        };
-      })
-    ),
-  };
-}
-
 export default function RadioMap() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const readyRef = useRef(false);
   const flyToActiveRef = useRef(false);
   const flyToTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stationCountRef = useRef(0);
 
   const currentId = useRadio((s) => s.currentStationId);
   const currentIdRef = useRef(currentId);
   currentIdRef.current = currentId;
+
+  // Subscribe to station count for progressive map updates
+  const stationCount = useRadio((s) => s.stations.length);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -134,20 +114,8 @@ export default function RadioMap() {
         } as never);
       } catch {}
 
-      map.addSource("ambient", { type: "geojson", data: EMPTY_FC });
-      map.addLayer({
-        id: "ambient-dots",
-        type: "circle",
-        source: "ambient",
-        paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 1.8, 6, 4],
-          "circle-color": "#5dff95",
-          "circle-opacity": 0.8,
-          "circle-blur": 0.5,
-        },
-      });
-
       map.addSource("stations", { type: "geojson", data: EMPTY_FC });
+      // 外发光：仅选中的台有明显光晕，其余为很淡的小绿晕（Radio Garden 风格）
       map.addLayer({
         id: "station-glow",
         type: "circle",
@@ -156,13 +124,18 @@ export default function RadioMap() {
           "circle-radius": [
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            18, 10,
+            14, 5,
           ],
           "circle-color": "#1ed760",
           "circle-blur": 1,
-          "circle-opacity": 0.45,
+          "circle-opacity": [
+            "case",
+            ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
+            0.55, 0.3,
+          ],
         },
       });
+      // 实心点：精确落在真实电台位置；非选中为小绿点（无白圈），选中为白点
       map.addLayer({
         id: "station-core",
         type: "circle",
@@ -171,15 +144,20 @@ export default function RadioMap() {
           "circle-radius": [
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            7, 4.5,
+            6,
+            ["interpolate", ["linear"], ["zoom"], 2, 2.2, 6, 3.2],
           ],
           "circle-color": [
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            "#ffffff", "#1ed760",
+            "#ffffff", "#2be06a",
           ],
-          "circle-stroke-width": 1.5,
-          "circle-stroke-color": "rgba(255,255,255,0.85)",
+          "circle-stroke-width": [
+            "case",
+            ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
+            2, 0,
+          ],
+          "circle-stroke-color": "rgba(255,255,255,0.9)",
         },
       });
 
@@ -214,12 +192,8 @@ export default function RadioMap() {
       // Update map sources with all stations
       const { stations } = useRadio.getState();
       const stSrc = map.getSource("stations");
-      const amSrc = map.getSource("ambient");
       if (stSrc && stSrc.type === "geojson") {
         (stSrc as maplibregl.GeoJSONSource).setData(stationsToFC(stations));
-      }
-      if (amSrc && amSrc.type === "geojson") {
-        (amSrc as maplibregl.GeoJSONSource).setData(ambientDots(stations));
       }
 
       // Auto-tune nearest station
@@ -244,13 +218,22 @@ export default function RadioMap() {
 
     const id = currentId ?? "";
     map.setPaintProperty("station-glow", "circle-radius", [
-      "case", ["==", ["get", "id"], ["literal", id]], 18, 10,
+      "case", ["==", ["get", "id"], ["literal", id]], 14, 5,
+    ]);
+    map.setPaintProperty("station-glow", "circle-opacity", [
+      "case", ["==", ["get", "id"], ["literal", id]], 0.55, 0.3,
     ]);
     map.setPaintProperty("station-core", "circle-radius", [
-      "case", ["==", ["get", "id"], ["literal", id]], 7, 4.5,
+      "case",
+      ["==", ["get", "id"], ["literal", id]],
+      6,
+      ["interpolate", ["linear"], ["zoom"], 2, 2.2, 6, 3.2],
     ]);
     map.setPaintProperty("station-core", "circle-color", [
-      "case", ["==", ["get", "id"], ["literal", id]], "#ffffff", "#1ed760",
+      "case", ["==", ["get", "id"], ["literal", id]], "#ffffff", "#2be06a",
+    ]);
+    map.setPaintProperty("station-core", "circle-stroke-width", [
+      "case", ["==", ["get", "id"], ["literal", id]], 2, 0,
     ]);
 
     const { lastChange } = useRadio.getState();
@@ -265,6 +248,20 @@ export default function RadioMap() {
       }, 5500);
     }
   }, [currentId]);
+
+  // Update map sources when stations change (progressive loading)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current) return;
+    if (stationCount === stationCountRef.current) return;
+    stationCountRef.current = stationCount;
+
+    const { stations } = useRadio.getState();
+    const stSrc = map.getSource("stations");
+    if (stSrc && stSrc.type === "geojson") {
+      (stSrc as maplibregl.GeoJSONSource).setData(stationsToFC(stations));
+    }
+  }, [stationCount]);
 
   return <div ref={containerRef} className="map-root" />;
 }
