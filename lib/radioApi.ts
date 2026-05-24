@@ -55,11 +55,27 @@ function nextServer(): string {
 
 // ---------- Fetch all stations (progressive) ----------
 
+// Streams confirmed dead, requiring auth, or proxy-incompatible
+const BLOCKED_URL_PATTERNS = [
+  "icecast.vrtcdn.be",       // Belgium VRT icecast server down
+  "stream.khz.se",           // Sweden khz.se requires auth (401)
+  "67.249.184.45:8015",      // Hard Rock Radio FM - returns HTML
+  "rocket.streamradio.fr",   // AAAudio Luxembourg - 502
+  "minimw.imbc.com",         // MBC FM Korea - token expired (400)
+  "ice5.somafm.com",         // SomaFM - proxy incompatible
+];
+
+const BLOCKED_STATION_NAMES = new Set([
+  "Gagasi FM", // South Africa - 404
+]);
+
 const STATION_FILTER = (s: ApiStation) =>
   s.lastcheckok === 1 &&
   s.geo_lat != null &&
   s.geo_long != null &&
-  (s.url_resolved || s.url);
+  (s.url_resolved || s.url) &&
+  !BLOCKED_URL_PATTERNS.some((p) => (s.url_resolved || s.url).includes(p)) &&
+  !BLOCKED_STATION_NAMES.has(s.name);
 
 export async function fetchAllStations(): Promise<ApiStation[]> {
   const pages: ApiStation[][] = [];

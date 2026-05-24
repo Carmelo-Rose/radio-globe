@@ -18,7 +18,7 @@ type RadioState = {
   isLoading: boolean;
   isCached: boolean;
   loadProgress: string;
-  playbackError: string | null;
+  playbackError: { type: string; message: string } | null;
 
   setCurrent: (id: string | null, source: "tune" | "select") => void;
   togglePlay: () => void;
@@ -29,7 +29,7 @@ type RadioState = {
   setShowList: (open: boolean) => void;
   fetchAll: () => Promise<void>;
   getStation: (id: string) => Station | undefined;
-  setPlaybackError: (msg: string | null) => void;
+  setPlaybackError: (msg: { type: string; message: string } | null) => void;
 };
 
 // ---------- IndexedDB cache ----------
