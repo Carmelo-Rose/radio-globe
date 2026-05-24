@@ -32,10 +32,26 @@ export default function PlayerCard() {
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
+    let retries = 0;
+    const MAX_RETRIES = 3;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
 
     const onAudioError = () => {
-      setPlaybackError("流媒体连接失败");
-      useRadio.setState({ isPlaying: false });
+      if (disposed) return;
+      if (retries < MAX_RETRIES) {
+        retries++;
+        setPlaybackError(`连接中... (${retries}/${MAX_RETRIES})`);
+        retryTimer = setTimeout(() => {
+          if (!disposed && a.src) {
+            a.load();
+            a.play().catch(() => {});
+          }
+        }, 2000);
+      } else {
+        setPlaybackError("流媒体连接失败，请手动切台");
+        useRadio.setState({ isPlaying: false });
+      }
     };
     a.addEventListener("error", onAudioError);
 
@@ -51,21 +67,66 @@ export default function PlayerCard() {
       destroyHls();
 
       if (isHls && Hls.isSupported()) {
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          manifestLoadingTimeOut: 10000,
+          manifestLoadingMaxRetry: 3,
+          manifestLoadingRetryDelay: 2000,
+          levelLoadingTimeOut: 10000,
+          levelLoadingMaxRetry: 3,
+          levelLoadingRetryDelay: 2000,
+        });
         hls.loadSource(url);
         hls.attachMedia(a);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          retries = 0;
           a.play().then(
             () => setPlaybackError(null),
-            () => { setPlaybackError("无法播放此电台"); useRadio.setState({ isPlaying: false }); }
+            () => {
+              // Autoplay blocked — retry silently
+              setTimeout(() => {
+                if (!disposed) a.play().then(
+                  () => setPlaybackError(null),
+                  () => { setPlaybackError("浏览器阻止了自动播放，请点击播放按钮"); useRadio.setState({ isPlaying: false }); }
+                );
+              }, 500);
+            }
           );
         });
         hls.on(Hls.Events.ERROR, (_, data) => {
+          if (disposed) return;
           if (data.fatal) {
-            setPlaybackError("流媒体连接失败");
-            useRadio.setState({ isPlaying: false });
-            hls.destroy();
-            hlsRef.current = null;
+            if (retries < MAX_RETRIES) {
+              retries++;
+              setPlaybackError(`连接中... (${retries}/${MAX_RETRIES})`);
+              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                hls.startLoad();
+              } else {
+                hls.destroy();
+                hlsRef.current = null;
+                retryTimer = setTimeout(() => {
+                  if (!disposed && useRadio.getState().isPlaying) {
+                    const newHls = new Hls({ enableWorker: true, lowLatencyMode: true });
+                    newHls.loadSource(url);
+                    newHls.attachMedia(a);
+                    newHls.on(Hls.Events.MANIFEST_PARSED, () => {
+                      retries = 0;
+                      a.play().catch(() => {});
+                    });
+                    newHls.on(Hls.Events.ERROR, (_, d) => {
+                      if (d.fatal) onAudioError();
+                    });
+                    hlsRef.current = newHls;
+                  }
+                }, 2000);
+              }
+            } else {
+              setPlaybackError("流媒体连接失败，请手动切台");
+              useRadio.setState({ isPlaying: false });
+              hls.destroy();
+              hlsRef.current = null;
+            }
           }
         });
         hlsRef.current = hls;
@@ -73,7 +134,14 @@ export default function PlayerCard() {
         a.src = url;
         a.play().then(
           () => setPlaybackError(null),
-          () => { setPlaybackError("无法播放此电台"); useRadio.setState({ isPlaying: false }); }
+          () => {
+            setTimeout(() => {
+              if (!disposed) a.play().then(
+                () => setPlaybackError(null),
+                () => { setPlaybackError("浏览器阻止了自动播放，请点击播放按钮"); useRadio.setState({ isPlaying: false }); }
+              );
+            }, 500);
+          }
         );
       }
     } else {
@@ -83,6 +151,8 @@ export default function PlayerCard() {
     }
 
     return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
       a.removeEventListener("error", onAudioError);
       a.pause();
       a.src = "";
