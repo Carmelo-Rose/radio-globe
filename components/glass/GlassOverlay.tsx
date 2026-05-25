@@ -12,6 +12,22 @@ import {
   Spectrum,
   RadarCursor,
 } from "./primitives";
+import GlassMobileOverlay from "./GlassMobileOverlay";
+
+// 窄屏（原生 app / 手机浏览器）用竖屏移动版 UI；宽屏保留桌面布局。
+function useIsNarrow(): boolean {
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 640px)").matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 640px)");
+    const onChange = () => setNarrow(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return narrow;
+}
 
 const FONT_SANS = '"Inter", "Noto Sans SC", sans-serif';
 const FONT_MONO = '"JetBrains Mono", monospace';
@@ -513,6 +529,8 @@ function GlassPlayer() {
 
 // ---- Composed overlay -------------------------------------------------------
 export default function GlassOverlay() {
+  const narrow = useIsNarrow();
+  if (narrow) return <GlassMobileOverlay />;
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 25, pointerEvents: "none" }}>
       {/* vignette to integrate UI with the globe */}

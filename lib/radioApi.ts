@@ -96,7 +96,10 @@ export async function fetchAllStations(): Promise<ApiStation[]> {
 export async function* fetchAllStationsPages(): AsyncGenerator<ApiStation[]> {
   await resolveServers();
 
-  const PAGE = 10000;
+  // 分页设小一些：国内移动网络拉 radio-browser（服务器在欧美）时，
+  // 一万条/页的大包常超时导致全球数据加载失败、地图只剩中国台。
+  // 5000 条/页让每页更快返回，配合更长超时与更多重试更稳。
+  const PAGE = 5000;
 
   for (let offset = 0; ; offset += PAGE) {
     const params = new URLSearchParams({
@@ -108,11 +111,11 @@ export async function* fetchAllStationsPages(): AsyncGenerator<ApiStation[]> {
     });
 
     let page: ApiStation[] | null = null;
-    for (let attempt = 0; attempt < Math.min(3, servers.length); attempt++) {
+    for (let attempt = 0; attempt < Math.min(4, servers.length); attempt++) {
       const base = nextServer();
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 15000);
+        const timer = setTimeout(() => ctrl.abort(), 30000);
         const res = await fetch(`${base}/json/stations/search?${params}`, {
           headers: { "User-Agent": "RadioGlobe/0.1" },
           signal: ctrl.signal,

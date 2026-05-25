@@ -266,6 +266,32 @@ export function GlassIcon({ name, size = 20 }: { name: string; size?: number }) 
           <circle cx="12" cy="12" r="9" />
         </svg>
       );
+    case "globe":
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+        </svg>
+      );
+    case "profile":
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="9" r="3.5" />
+          <path d="M5 20a7 7 0 0 1 14 0" />
+        </svg>
+      );
+    case "plus":
+      return (
+        <svg {...common}>
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      );
+    case "minus":
+      return (
+        <svg {...common}>
+          <path d="M5 12h14" />
+        </svg>
+      );
     case "heart":
       return (
         <svg {...common}>

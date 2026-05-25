@@ -10,6 +10,11 @@
 /.next/
 /out/
 
+# capacitor native build
+/.api-stash/
+/android/.idea/
+/.claude/worktrees/
+
 # production
 /build
 

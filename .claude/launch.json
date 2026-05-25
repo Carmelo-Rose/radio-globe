@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3002
+    },
+    {
+      "name": "earth-radio-mock",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4173", "--directory", "Earth Radio"],
+      "port": 4173
     }
   ]
 }
