@@ -7,6 +7,7 @@ const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 
 type RadioState = {
   currentStationId: string | null;
+  hasStarted: boolean;
   isPlaying: boolean;
   volume: number;
   favorites: Set<string>;
@@ -18,9 +19,11 @@ type RadioState = {
   isLoading: boolean;
   isCached: boolean;
   loadProgress: string;
-  playbackError: { type: string; message: string } | null;
+  playbackError: PlaybackError | null;
+  isPinned: boolean;
 
   setCurrent: (id: string | null, source: "tune" | "select") => void;
+  start: () => void;
   togglePlay: () => void;
   next: () => void;
   prev: () => void;
@@ -29,7 +32,13 @@ type RadioState = {
   setShowList: (open: boolean) => void;
   fetchAll: () => Promise<void>;
   getStation: (id: string) => Station | undefined;
-  setPlaybackError: (msg: { type: string; message: string } | null) => void;
+  setPlaybackError: (msg: PlaybackError | null) => void;
+  togglePin: () => void;
+};
+
+type PlaybackError = {
+  type: "offline" | "error";
+  message: string;
 };
 
 // ---------- IndexedDB cache ----------
@@ -44,10 +53,11 @@ function openDB(): Promise<IDBDatabase> {
 }
 
 async function loadCachedStations(): Promise<Station[] | null> {
+  let db: IDBDatabase | null = null;
   try {
-    const db = await openDB();
-    return new Promise((resolve) => {
-      const tx = db.transaction("cache", "readonly");
+    db = await openDB();
+    return await new Promise((resolve) => {
+      const tx = db!.transaction("cache", "readonly");
       const store = tx.objectStore("cache");
       const req = store.get(CACHE_KEY);
       req.onsuccess = () => {
@@ -62,16 +72,25 @@ async function loadCachedStations(): Promise<Station[] | null> {
     });
   } catch {
     return null;
+  } finally {
+    db?.close();
   }
 }
 
 async function saveCachedStations(stations: Station[]): Promise<void> {
+  let db: IDBDatabase | null = null;
   try {
-    const db = await openDB();
+    db = await openDB();
     const tx = db.transaction("cache", "readwrite");
     tx.objectStore("cache").put({ data: stations, ts: Date.now() }, CACHE_KEY);
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   } catch {
     // ignore
+  } finally {
+    db?.close();
   }
 }
 
@@ -81,7 +100,10 @@ function loadFavorites(): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
     const raw = localStorage.getItem("radio_favorites");
-    return raw ? new Set(JSON.parse(raw)) : new Set();
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((v): v is string => typeof v === "string"));
   } catch {
     return new Set();
   }
@@ -95,14 +117,12 @@ function applyStations(prev: RadioState, stations: Station[]): Partial<RadioStat
   if (currentStationId && !stationMap.has(currentStationId)) {
     currentStationId = null;
   }
-  if (!currentStationId && stations.length > 0) {
-    currentStationId = stations[0].id;
-  }
-  return { stations, stationMap, currentStationId, lastChange: "tune" as const };
+  return { stations, stationMap, currentStationId };
 }
 
 export const useRadio = create<RadioState>((set, get) => ({
   currentStationId: null,
+  hasStarted: false,
   isPlaying: false,
   volume: 0.8,
   favorites: loadFavorites(),
@@ -115,15 +135,32 @@ export const useRadio = create<RadioState>((set, get) => ({
   isCached: false,
   loadProgress: "",
   playbackError: null,
+  isPinned: false,
 
   setCurrent: (id, source) => {
     const prev = get();
     if (id === prev.currentStationId) {
-      set({ isPlaying: false, playbackError: null });
-      setTimeout(() => set({ isPlaying: true }), 50);
+      if (!prev.hasStarted) {
+        set({ lastChange: source, playbackError: null });
+        return;
+      }
+      set({ isPlaying: false, lastChange: source, playbackError: null });
+      setTimeout(() => {
+        if (get().hasStarted) set({ isPlaying: true });
+      }, 50);
       return;
     }
-    set({ currentStationId: id, lastChange: source, isPlaying: true, playbackError: null });
+    set({
+      currentStationId: id,
+      lastChange: source,
+      isPlaying: prev.hasStarted,
+      playbackError: null,
+    });
+  },
+
+  start: () => {
+    const { currentStationId } = get();
+    set({ hasStarted: true, isPlaying: Boolean(currentStationId), playbackError: null });
   },
 
   togglePlay: () => {
@@ -141,7 +178,13 @@ export const useRadio = create<RadioState>((set, get) => ({
     const nextIdx = i < 0 ? 0 : (i + 1) % stations.length;
     const id = stations[nextIdx].id;
     if (id === currentStationId) return;
-    set({ currentStationId: id, lastChange: "select", isPlaying: true, playbackError: null });
+    set({
+      currentStationId: id,
+      lastChange: "select",
+      hasStarted: true,
+      isPlaying: true,
+      playbackError: null,
+    });
   },
 
   prev: () => {
@@ -151,7 +194,13 @@ export const useRadio = create<RadioState>((set, get) => ({
     const prevIdx = i < 0 ? stations.length - 1 : (i - 1 + stations.length) % stations.length;
     const id = stations[prevIdx].id;
     if (id === currentStationId) return;
-    set({ currentStationId: id, lastChange: "select", isPlaying: true, playbackError: null });
+    set({
+      currentStationId: id,
+      lastChange: "select",
+      hasStarted: true,
+      isPlaying: true,
+      playbackError: null,
+    });
   },
 
   toggleFavorite: (id) =>
@@ -167,6 +216,8 @@ export const useRadio = create<RadioState>((set, get) => ({
   getStation: (id) => get().stationMap.get(id),
 
   setPlaybackError: (msg) => set({ playbackError: msg }),
+
+  togglePin: () => set((s) => ({ isPinned: !s.isPinned })),
 
   fetchAll: async () => {
     if (get().isLoading) return;

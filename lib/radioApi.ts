@@ -1,5 +1,12 @@
 import type { Station } from "./stations";
-import { matchCity, cityJitter } from "./cnGeo";
+import {
+  matchCity,
+  matchProvince,
+  isNationalStation,
+  nationalCenter,
+  fallbackCity,
+  cityJitter,
+} from "./cnGeo";
 
 export type ApiStation = {
   stationuuid: string;
@@ -189,7 +196,12 @@ export async function fetchChinaStations(): Promise<Station[]> {
   for (let attempt = 0; attempt < Math.min(3, servers.length); attempt++) {
     const base = nextServer();
     try {
-      const res = await fetch(`${base}/json/stations/search?${params}`);
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      const res = await fetch(`${base}/json/stations/search?${params}`, {
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
       if (!res.ok) continue;
       data = await res.json();
       break;
@@ -214,9 +226,12 @@ export async function fetchChinaStations(): Promise<Station[]> {
       lat = s.geo_lat;
       city = s.state || "中国";
     } else {
-      // 用台名里的城市定位；定位不到就跳过（不放假点）
-      const m = matchCity(s.name);
-      if (!m) continue;
+      // 依次尝试：城市名 -> 省份(省会) -> 全国性台(北京) -> 兜底散布到真实城市
+      const m =
+        matchCity(s.name) ||
+        matchProvince(s.name) ||
+        (isNationalStation(s.name) ? nationalCenter() : null) ||
+        fallbackCity(s.stationuuid);
       const [dx, dy] = cityJitter(s.stationuuid);
       lng = m.lng + dx;
       lat = m.lat + dy;

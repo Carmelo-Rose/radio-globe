@@ -8,6 +8,8 @@ import { useRadio } from "@/lib/store";
 import { mapBridge } from "@/lib/mapBridge";
 
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+const RETICLE_RADIUS_PX = 40;
+const SNAP_DURATION_MS = 260;
 
 function stationsToFC(stations: Station[]): GeoJSON.FeatureCollection {
   return {
@@ -20,13 +22,64 @@ function stationsToFC(stations: Station[]): GeoJSON.FeatureCollection {
   };
 }
 
+function stationRadiusExpression(currentId: string | null): unknown[] {
+  const isCurrent = ["==", ["get", "id"], ["literal", currentId ?? ""]];
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    2,
+    ["case", isCurrent, 4.4, 1.5],
+    5,
+    ["case", isCurrent, 5.2, 2.2],
+    8,
+    ["case", isCurrent, 6, 3.2],
+  ];
+}
+
+function closestRenderedStationInReticle(map: MlMap): string | null {
+  const canvas = map.getCanvas();
+  const cx = canvas.clientWidth / 2;
+  const cy = canvas.clientHeight / 2;
+  const features = map.queryRenderedFeatures(
+    [
+      [cx - RETICLE_RADIUS_PX, cy - RETICLE_RADIUS_PX],
+      [cx + RETICLE_RADIUS_PX, cy + RETICLE_RADIUS_PX],
+    ],
+    { layers: ["station-core"] }
+  );
+
+  let bestId: string | null = null;
+  let bestPx = Infinity;
+  const seen = new Set<string>();
+  const { stationMap } = useRadio.getState();
+  for (const feature of features) {
+    const id = feature.properties?.id as string | undefined;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const station = stationMap.get(id);
+    if (!station) continue;
+    const p = map.project([station.lng, station.lat]);
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const px = Math.hypot(dx, dy);
+    if (px <= RETICLE_RADIUS_PX && px < bestPx) {
+      bestPx = px;
+      bestId = id;
+    }
+  }
+  return bestId;
+}
+
 export default function RadioMap() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const readyRef = useRef(false);
   const flyToActiveRef = useRef(false);
   const flyToTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const snapFrameRef = useRef<number | null>(null);
   const stationCountRef = useRef(0);
+  const autoTunedRef = useRef(false);
 
   const currentId = useRadio((s) => s.currentStationId);
   const currentIdRef = useRef(currentId);
@@ -41,7 +94,7 @@ export default function RadioMap() {
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      center: [116.4, 39.9],
+      center: [118.8, 32.1],
       zoom: 3.2,
       minZoom: 2.2,
       maxZoom: 18,
@@ -115,58 +168,73 @@ export default function RadioMap() {
       } catch {}
 
       map.addSource("stations", { type: "geojson", data: EMPTY_FC });
-      // 外发光：仅选中的台有明显光晕，其余为很淡的小绿晕（Radio Garden 风格）
+      // 保留图层占位用于将来扩展；当前外圈由中心 reticle 呈现，避免点层发虚。
       map.addLayer({
         id: "station-glow",
         type: "circle",
         source: "stations",
         paint: {
-          "circle-radius": [
-            "case",
-            ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            14, 5,
-          ],
+          "circle-radius": 0,
           "circle-color": "#1ed760",
-          "circle-blur": 1,
-          "circle-opacity": [
-            "case",
-            ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            0.55, 0.3,
-          ],
+          "circle-blur": 0,
+          "circle-opacity": 0,
         },
       });
-      // 实心点：精确落在真实电台位置；非选中为小绿点（无白圈），选中为白点
+      // 实心点：普通台更接近 Radio Garden 的低调点状密度，选中态由中心环强化。
       map.addLayer({
         id: "station-core",
         type: "circle",
         source: "stations",
         paint: {
-          "circle-radius": [
-            "case",
-            ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            6,
-            ["interpolate", ["linear"], ["zoom"], 2, 2.8, 6, 4],
-          ],
+          "circle-radius": stationRadiusExpression(currentIdRef.current) as never,
           "circle-color": [
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            "#ffffff", "#39ee78",
+            "#d8ffe0", "#47f278",
+          ],
+          "circle-opacity": [
+            "case",
+            ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
+            0.95, 0.88,
           ],
           "circle-stroke-width": [
             "case",
             ["==", ["get", "id"], ["literal", currentIdRef.current ?? ""]],
-            2, 0,
+            1, 0,
           ],
-          "circle-stroke-color": "rgba(255,255,255,0.9)",
+          "circle-stroke-color": "#2cff69",
         },
       });
 
       readyRef.current = true;
       map.triggerRepaint();
 
+      const clearFlyToLock = (delay = SNAP_DURATION_MS + 90) => {
+        if (flyToTimerRef.current) clearTimeout(flyToTimerRef.current);
+        flyToTimerRef.current = setTimeout(() => {
+          flyToActiveRef.current = false;
+        }, delay);
+      };
+
+      const snapStationToReticle = (id: string, source: "tune" | "select") => {
+        const station = useRadio.getState().getStation(id);
+        if (!station) return;
+        flyToActiveRef.current = true;
+        if (id !== currentIdRef.current) {
+          useRadio.getState().setCurrent(id, source);
+        }
+        map.easeTo({
+          center: [station.lng, station.lat],
+          duration: SNAP_DURATION_MS,
+          easing: (t) => 1 - (1 - t) ** 3,
+          essential: true,
+        });
+        clearFlyToLock();
+      };
+
       const onClickPoint = (e: maplibregl.MapLayerMouseEvent) => {
         const id = e.features?.[0]?.properties?.id as string | undefined;
-        if (id) useRadio.getState().setCurrent(id, "select");
+        if (id) snapStationToReticle(id, "select");
       };
       map.on("click", "station-core", onClickPoint);
       map.on("click", "station-glow", onClickPoint);
@@ -175,15 +243,22 @@ export default function RadioMap() {
         map.on("mouseleave", lyr, () => (map.getCanvas().style.cursor = ""));
       }
 
-      // moveend: only auto-tune nearest station from already-loaded data
-      map.on("moveend", () => {
+      const scanReticleForStation = () => {
+        snapFrameRef.current = null;
         if (flyToActiveRef.current) return;
-        const { stations } = useRadio.getState();
-        if (stations.length === 0) return;
-        const c = map.getCenter();
-        const near = nearestStation(stations, c.lng, c.lat);
-        if (near) useRadio.getState().setCurrent(near.id, "tune");
-      });
+        if (useRadio.getState().isPinned) return;
+        if (useRadio.getState().stations.length === 0) return;
+        const id = closestRenderedStationInReticle(map);
+        if (id) snapStationToReticle(id, "tune");
+      };
+
+      const queueReticleScan = () => {
+        if (snapFrameRef.current != null || flyToActiveRef.current) return;
+        snapFrameRef.current = requestAnimationFrame(scanReticleForStation);
+      };
+
+      // Radio Garden 风格的磁吸：仅在停止拖动后吸附，避免拖动中被中心圈反复拉回。
+      map.on("moveend", queueReticleScan);
 
       // Fetch ALL stations once
       await useRadio.getState().fetchAll();
@@ -196,14 +271,21 @@ export default function RadioMap() {
         (stSrc as maplibregl.GeoJSONSource).setData(stationsToFC(stations));
       }
 
-      // Auto-tune nearest station
-      const c = map.getCenter();
-      const near = nearestStation(stations, c.lng, c.lat);
-      if (near) useRadio.getState().setCurrent(near.id, "tune");
+      // Fallback auto-tune (若渐进更新尚未选中任何台)
+      if (!autoTunedRef.current && !useRadio.getState().currentStationId) {
+        const c = map.getCenter();
+        const near = nearestStation(stations, c.lng, c.lat);
+        if (near) {
+          autoTunedRef.current = true;
+          snapStationToReticle(near.id, "tune");
+        }
+      }
     });
 
     return () => {
       mounted = false;
+      if (snapFrameRef.current != null) cancelAnimationFrame(snapFrameRef.current);
+      if (flyToTimerRef.current) clearTimeout(flyToTimerRef.current);
       map.remove();
       mapRef.current = null;
       mapBridge.map = null;
@@ -217,23 +299,17 @@ export default function RadioMap() {
     if (!map || !readyRef.current) return;
 
     const id = currentId ?? "";
-    map.setPaintProperty("station-glow", "circle-radius", [
-      "case", ["==", ["get", "id"], ["literal", id]], 14, 5,
-    ]);
-    map.setPaintProperty("station-glow", "circle-opacity", [
-      "case", ["==", ["get", "id"], ["literal", id]], 0.55, 0.3,
-    ]);
-    map.setPaintProperty("station-core", "circle-radius", [
-      "case",
-      ["==", ["get", "id"], ["literal", id]],
-      6,
-      ["interpolate", ["linear"], ["zoom"], 2, 2.8, 6, 4],
-    ]);
+    map.setPaintProperty("station-glow", "circle-radius", 0);
+    map.setPaintProperty("station-glow", "circle-opacity", 0);
+    map.setPaintProperty("station-core", "circle-radius", stationRadiusExpression(id));
     map.setPaintProperty("station-core", "circle-color", [
-      "case", ["==", ["get", "id"], ["literal", id]], "#ffffff", "#39ee78",
+      "case", ["==", ["get", "id"], ["literal", id]], "#d8ffe0", "#47f278",
+    ]);
+    map.setPaintProperty("station-core", "circle-opacity", [
+      "case", ["==", ["get", "id"], ["literal", id]], 0.95, 0.88,
     ]);
     map.setPaintProperty("station-core", "circle-stroke-width", [
-      "case", ["==", ["get", "id"], ["literal", id]], 2, 0,
+      "case", ["==", ["get", "id"], ["literal", id]], 1, 0,
     ]);
 
     const { lastChange } = useRadio.getState();
@@ -247,6 +323,10 @@ export default function RadioMap() {
         flyToActiveRef.current = false;
       }, 5500);
     }
+    // 注意：不要在此 effect 的 cleanup 里 clearTimeout(flyToTimerRef)。
+    // 它会在每次 currentId 变化时取消“复位 flyToActiveRef”的定时器，
+    // 导致磁吸吸附一次后 flyToActiveRef 永久卡在 true、磁吸失效。
+    // 该定时器已在组件卸载的总 cleanup 中清理。
   }, [currentId]);
 
   // Update map sources when stations change (progressive loading)
@@ -260,6 +340,17 @@ export default function RadioMap() {
     const stSrc = map.getSource("stations");
     if (stSrc && stSrc.type === "geojson") {
       (stSrc as maplibregl.GeoJSONSource).setData(stationsToFC(stations));
+    }
+
+    // 首批数据到达就立即调谐到地图中心最近的台，无需等全量加载完，
+    // 避免初始长时间“加载中 / 旋转地球”的空状态。
+    if (!autoTunedRef.current && !useRadio.getState().currentStationId && stations.length > 0) {
+      const c = map.getCenter();
+      const near = nearestStation(stations, c.lng, c.lat);
+      if (near) {
+        autoTunedRef.current = true;
+        useRadio.getState().setCurrent(near.id, "tune");
+      }
     }
   }, [stationCount]);
 

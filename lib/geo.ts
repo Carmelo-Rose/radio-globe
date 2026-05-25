@@ -1,6 +1,6 @@
 import type { Station } from "./stations";
 
-function haversineKm(aLng: number, aLat: number, bLng: number, bLat: number): number {
+export function haversineKm(aLng: number, aLat: number, bLng: number, bLat: number): number {
   const R = 6371;
   const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(bLat - aLat);
@@ -30,4 +30,24 @@ export function nearestStation(
     }
   }
   return best && bestKm <= maxKm ? best : null;
+}
+
+export type NearbyStation = Station & { km: number };
+
+// 返回离给定坐标最近的若干电台（不含 excludeId），按距离升序。
+export function nearbyStations(
+  stations: Station[],
+  centerLng: number,
+  centerLat: number,
+  limit = 6,
+  excludeId?: string
+): NearbyStation[] {
+  const scored: NearbyStation[] = [];
+  for (const s of stations) {
+    if (s.id === excludeId) continue;
+    const km = haversineKm(centerLng, centerLat, s.lng, s.lat);
+    scored.push({ ...s, km });
+  }
+  scored.sort((a, b) => a.km - b.km);
+  return scored.slice(0, limit);
 }

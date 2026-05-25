@@ -59,8 +59,55 @@ export const CN_CITIES: Record<string, [number, number]> = {
   镇江: [119.45, 32.2],
 };
 
-// 按城市名长度降序，优先匹配更长的名字（避免"南京"被"南"类误伤之类）
+// 省 / 自治区 / 直辖市 -> 省会(或中心)真实坐标。用于台名只含省份时定位。
+// 键同时含全称与常见简称，按名字长度降序匹配，避免"广东"误伤"广"。
+export const CN_PROVINCES: Record<string, [number, number]> = {
+  黑龙江: [126.53, 45.8], // 哈尔滨
+  内蒙古: [111.75, 40.84], // 呼和浩特
+  黑龙: [126.53, 45.8],
+  广东: [113.26, 23.13], // 广州
+  广西: [108.37, 22.82], // 南宁
+  山东: [117.0, 36.65], // 济南
+  山西: [112.55, 37.87], // 太原
+  河南: [113.62, 34.75], // 郑州
+  河北: [114.51, 38.04], // 石家庄
+  湖南: [112.94, 28.23], // 长沙
+  湖北: [114.3, 30.59], // 武汉
+  江苏: [118.8, 32.06], // 南京
+  江西: [115.86, 28.68], // 南昌
+  浙江: [120.15, 30.27], // 杭州
+  福建: [119.3, 26.08], // 福州
+  安徽: [117.27, 31.86], // 合肥
+  四川: [104.07, 30.66], // 成都
+  贵州: [106.63, 26.65], // 贵阳
+  云南: [102.83, 24.88], // 昆明
+  陕西: [108.94, 34.34], // 西安
+  甘肃: [103.83, 36.06], // 兰州
+  青海: [101.78, 36.62], // 西宁
+  宁夏: [106.27, 38.47], // 银川
+  新疆: [87.62, 43.79], // 乌鲁木齐
+  西藏: [91.11, 29.66], // 拉萨
+  辽宁: [123.43, 41.8], // 沈阳
+  吉林: [125.32, 43.82], // 长春
+  海南: [110.2, 20.04], // 海口
+  台湾: [121.52, 25.04], // 台北
+  香港: [114.17, 22.32],
+  澳门: [113.55, 22.2],
+};
+
+// 全国性广播网/卫视：无具体城市，统一落到对应中心点。
+const NATIONAL_KEYWORDS = [
+  "中国之声", "经济之声", "音乐之声", "中华之声", "神州之声",
+  "央广", "CNR", "CCTV", "中央", "国际", "环球", "凤凰", "China",
+  "华语", "亚洲", "AsiaFM", "AisaFM", "粤语", "BBN",
+];
+const NATIONAL_CENTER: [number, number] = [116.41, 39.9]; // 北京
+
+// 按名字长度降序，优先匹配更长的名字
 const CITY_NAMES = Object.keys(CN_CITIES).sort((a, b) => b.length - a.length);
+const PROVINCE_NAMES = Object.keys(CN_PROVINCES).sort((a, b) => b.length - a.length);
+// 兜底用：把无法定位的台稳定散布到这些真实城市，避免落到海里/无人区
+const FALLBACK_CITIES = Object.values(CN_CITIES);
 
 /** 从电台名中找出它所属的中国城市；找不到返回 null */
 export function matchCity(name: string): { city: string; lng: number; lat: number } | null {
@@ -71,6 +118,33 @@ export function matchCity(name: string): { city: string; lng: number; lat: numbe
     }
   }
   return null;
+}
+
+/** 从电台名中找出它所属的省份(落到省会)；找不到返回 null */
+export function matchProvince(name: string): { city: string; lng: number; lat: number } | null {
+  for (const p of PROVINCE_NAMES) {
+    if (name.includes(p)) {
+      const [lng, lat] = CN_PROVINCES[p];
+      return { city: p, lng, lat };
+    }
+  }
+  return null;
+}
+
+/** 是否为全国性台(央广/卫视/国际等)，无单一城市归属 */
+export function isNationalStation(name: string): boolean {
+  return NATIONAL_KEYWORDS.some((k) => name.includes(k));
+}
+export function nationalCenter(): { city: string; lng: number; lat: number } {
+  return { city: "全国", lng: NATIONAL_CENTER[0], lat: NATIONAL_CENTER[1] };
+}
+
+/** 兜底：按 id 稳定分配到某个真实城市，保证点都在陆地上 */
+export function fallbackCity(id: string): { city: string; lng: number; lat: number } {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  const [lng, lat] = FALLBACK_CITIES[Math.abs(h) % FALLBACK_CITIES.length];
+  return { city: "中国", lng, lat };
 }
 
 /** 用字符串 id 生成稳定的小幅经纬度抖动（±~3km），让同城多个台不完全重叠 */
