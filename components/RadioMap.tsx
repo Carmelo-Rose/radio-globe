@@ -11,6 +11,39 @@ const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", feature
 const RETICLE_RADIUS_PX = 40;
 const SNAP_DURATION_MS = 260;
 
+// 中国边界范围 + 渐变过渡带
+const CN_BOUNDS = { west: 73, east: 135, south: 18, north: 54 };
+const CN_MARGIN = 10; // 过渡带宽度（度）
+
+function chinaBlendFactor(lng: number, lat: number): number {
+  // 返回 0~1，1=完全在中国范围内，0=完全在外面
+  const { west, east, south, north } = CN_BOUNDS;
+  const m = CN_MARGIN;
+  const x = Math.min(Math.max((lng - (west - m)) / ((west + m) - (west - m)), 0), 1)
+           * (1 - Math.min(Math.max((lng - (east - m)) / ((east + m) - (east - m)), 0), 1));
+  const y = Math.min(Math.max((lat - (south - m)) / ((south + m) - (south - m)), 0), 1)
+           * (1 - Math.min(Math.max((lat - (north - m)) / ((north + m) - (north - m)), 0), 1));
+  // 用更柔和的曲线
+  const raw = x * y;
+  return raw * raw * (3 - 2 * raw); // smoothstep
+}
+
+function updateTileOpacity(map: MlMap) {
+  const c = map.getCenter();
+  const blend = chinaBlendFactor(c.lng, c.lat);
+  // 中国区域内：高德可见，NASA/Esri 隐藏
+  // 中国区域外：NASA/Esri 可见，高德隐藏
+  // 过渡带：交叉淡入淡出
+  try {
+    map.setPaintProperty("earth", "raster-opacity", 1 - blend);
+    map.setPaintProperty("esri", "raster-opacity",
+      ["interpolate", ["linear"], ["zoom"], 5, 0, 6.5, 1 - blend] as never);
+    map.setPaintProperty("amap-satellite", "raster-opacity", blend);
+    map.setPaintProperty("amap-road", "raster-opacity",
+      ["interpolate", ["linear"], ["zoom"], 5, 0, 6, blend * 0.6] as never);
+  } catch {}
+}
+
 // 落地默认台：优先选稳定可播的具体源，避免同名电台里排在前面的坏源被选中。
 const DEFAULT_STATION_CANDIDATES = [
   { name: "中国之声", streamIncludes: "radio.0472.org/?id=639" },
@@ -142,6 +175,29 @@ export default function RadioMap() {
             attribution:
               'High-res © <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics',
           },
+          amapSatellite: {
+            type: "raster",
+            tiles: [
+              "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+              "https://webst02.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+              "https://webst03.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+              "https://webst04.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+            ],
+            tileSize: 256,
+            maxzoom: 18,
+            attribution: '© <a href="https://amap.com">高德地图</a>',
+          },
+          amapRoad: {
+            type: "raster",
+            tiles: [
+              "https://webst01.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}",
+              "https://webst02.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}",
+              "https://webst03.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}",
+              "https://webst04.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}",
+            ],
+            tileSize: 256,
+            maxzoom: 18,
+          },
         },
         layers: [
           { id: "space", type: "background", paint: { "background-color": "#0a1a3a" } },
@@ -155,6 +211,8 @@ export default function RadioMap() {
               "raster-opacity": ["interpolate", ["linear"], ["zoom"], 5, 0, 6.5, 1],
             },
           },
+          { id: "amap-satellite", type: "raster", source: "amapSatellite", paint: { "raster-opacity": 0 } },
+          { id: "amap-road", type: "raster", source: "amapRoad", paint: { "raster-opacity": 0 } },
         ],
       },
     });
@@ -295,6 +353,10 @@ export default function RadioMap() {
 
       // Radio Garden 风格的磁吸：仅在停止拖动后吸附，避免拖动中被中心圈反复拉回。
       map.on("moveend", queueReticleScan);
+
+      // 根据视口位置切换瓦片源
+      map.on("moveend", () => updateTileOpacity(map));
+      updateTileOpacity(map);
 
       // Fetch ALL stations once
       await useRadio.getState().fetchAll();
