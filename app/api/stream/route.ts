@@ -82,19 +82,38 @@ export async function GET(req: NextRequest) {
     }
 
     const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+    const ctLower = contentType.toLowerCase();
 
     // Detect offline streams: server returns HTML instead of audio
-    if (contentType.includes("text/html")) {
+    if (ctLower.includes("text/html")) {
       return new Response("STREAM_OFFLINE", {
         status: 502,
         headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" },
       });
     }
 
+    // 跟随 302 后的最终地址：既用于判断是否 HLS，也用于解析相对分片路径。
+    const finalUrl = upstream.url || url;
+    let finalPath = "";
+    try {
+      finalPath = new URL(finalUrl).pathname.toLowerCase();
+    } catch {
+      /* ignore */
+    }
+    // HLS 判定：content-type 常不可靠（国内服务器多回 application/octet-stream），
+    // 因此同时看跳转后最终 URL 的路径是否以 .m3u8 结尾。
+    // 0472(radio.0472.org/?id=N) 跳到 ytcast2.radio.cn/.../index_N.m3u8 即由此命中。
+    const isHlsManifest =
+      ctLower.includes("mpegurl") ||
+      ctLower.includes("m3u8") ||
+      finalPath.endsWith(".m3u8") ||
+      url.toLowerCase().endsWith(".m3u8");
+
     // For HLS manifests, rewrite segment URLs to go through proxy
-    if (contentType.includes("mpegurl") || contentType.includes("m3u8") || url.endsWith(".m3u8")) {
+    if (isHlsManifest) {
       const text = await upstream.text();
-      const base = new URL(".", url).href;
+      // m3u8 里的分片是相对路径，必须相对跳转后的最终地址解析，否则分片 404。
+      const base = new URL(".", finalUrl).href;
       const rewritten = text.replace(
         /^(?!#)(?!https?:\/\/)(.+\.m3u8|.+\.ts|.+)$/gm,
         (match) => {

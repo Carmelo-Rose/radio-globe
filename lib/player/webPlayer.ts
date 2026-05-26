@@ -136,7 +136,10 @@ export class WebPlayer implements RadioPlayer {
     this.markFailedRunning = false;
     this.audio.volume = this.volume;
 
-    const isHls = /\.m3u8/i.test(url);
+    // 0472 中转地址（radio.0472.org/?id=N）无 .m3u8 扩展名，但 302 跳转后是 HLS。
+    // 代理(/api/stream)会跟随跳转并把它当 HLS 重写，这里也据此走 hls.js 路径，
+    // 否则会被当普通流喂给 <audio>（非 Safari 浏览器无法原生播 HLS）而无声。
+    const isHls = /\.m3u8/i.test(url) || url.includes("radio.0472.org");
     if (isHls && Hls.isSupported()) {
       this.startHls(url);
       return;
