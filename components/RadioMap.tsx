@@ -122,37 +122,39 @@ export default function RadioMap() {
         version: 8,
         glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
         sources: {
-          earth: {
+          amapSatellite: {
             type: "raster",
             tiles: [
-              "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg",
+              "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+              "https://webst02.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+              "https://webst03.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+              "https://webst04.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
             ],
             tileSize: 256,
-            maxzoom: 8,
-            attribution:
-              'Imagery © <a href="https://earthdata.nasa.gov/gibs">NASA EOSDIS GIBS</a> · Blue Marble',
+            maxzoom: 18,
+            attribution: '© <a href="https://amap.com">高德地图</a>',
           },
-          esri: {
+          amapRoad: {
             type: "raster",
             tiles: [
-              "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+              "https://webst01.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}",
+              "https://webst02.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}",
+              "https://webst03.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}",
+              "https://webst04.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}",
             ],
             tileSize: 256,
-            maxzoom: 19,
-            attribution:
-              'High-res © <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics',
+            maxzoom: 18,
           },
         },
         layers: [
           { id: "space", type: "background", paint: { "background-color": "#0a1a3a" } },
-          { id: "earth", type: "raster", source: "earth", paint: { "raster-saturation": -0.15 } },
+          { id: "amap-satellite", type: "raster", source: "amapSatellite" },
           {
-            id: "esri",
+            id: "amap-road",
             type: "raster",
-            source: "esri",
-            minzoom: 5,
+            source: "amapRoad",
             paint: {
-              "raster-opacity": ["interpolate", ["linear"], ["zoom"], 5, 0, 6.5, 1],
+              "raster-opacity": ["interpolate", ["linear"], ["zoom"], 5, 0, 6, 0.6],
             },
           },
         ],
