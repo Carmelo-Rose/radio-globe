@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import type { Station } from "./stations";
-import { fetchAllStationsPages, fetchChinaStations, toStation } from "./radioApi";
+import { BOOTSTRAP_STATIONS, type Station } from "./stations";
+import { fetchAllStationsPages, fetchChinaStations, toStation, isBlockedStream } from "./radioApi";
 
 const CACHE_KEY = "radio_stations_cache";
 const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
@@ -12,12 +12,16 @@ type RadioState = {
   volume: number;
   favorites: Set<string>;
   showList: boolean;
+  listFilter: "all" | "favorites";
   lastChange: "tune" | "select";
 
   stations: Station[];
   stationMap: Map<string, Station>;
   isLoading: boolean;
   isCached: boolean;
+  // 是否已加载到真实电台数据（缓存/接口）。为 false 时只有 bootstrap 兜底台，
+  // UI 据此显示"加载中…"而非误导性的"4 STATIONS"。
+  hasRealData: boolean;
   loadProgress: string;
   playbackError: PlaybackError | null;
   isPinned: boolean;
@@ -30,6 +34,7 @@ type RadioState = {
   toggleFavorite: (id: string) => void;
   setVolume: (v: number) => void;
   setShowList: (open: boolean) => void;
+  openList: (filter: "all" | "favorites") => void;
   fetchAll: () => Promise<void>;
   getStation: (id: string) => Station | undefined;
   setPlaybackError: (msg: PlaybackError | null) => void;
@@ -127,12 +132,14 @@ export const useRadio = create<RadioState>((set, get) => ({
   volume: 0.8,
   favorites: loadFavorites(),
   showList: false,
+  listFilter: "all",
   lastChange: "select",
 
   stations: [],
   stationMap: new Map(),
   isLoading: false,
   isCached: false,
+  hasRealData: false,
   loadProgress: "",
   playbackError: null,
   isPinned: false,
@@ -212,6 +219,7 @@ export const useRadio = create<RadioState>((set, get) => ({
 
   setVolume: (v) => set({ volume: Math.min(1, Math.max(0, v)) }),
   setShowList: (open) => set({ showList: open }),
+  openList: (filter) => set({ showList: true, listFilter: filter }),
 
   getStation: (id) => get().stationMap.get(id),
 
@@ -223,14 +231,39 @@ export const useRadio = create<RadioState>((set, get) => ({
     if (get().isLoading) return;
     set({ isLoading: true, loadProgress: "加载中..." });
 
-    // 1. Load cached data first (instant)
-    const cached = await loadCachedStations();
-    if (cached && cached.length > 0 && get().stations.length === 0) {
-      set((prev) => ({
-        ...applyStations(prev, cached),
-        isCached: true,
-        loadProgress: `已加载 ${cached.length} 个缓存电台`,
-      }));
+    // 冷启动兜底：真机网络拉 radio-browser 可能较慢甚至失败。
+    // 先放入少量确认可播的内置台，保证用户点开始后立刻有声源。
+    if (get().stations.length === 0) {
+      set((prev) => {
+        const currentStationId = prev.currentStationId ?? BOOTSTRAP_STATIONS[0]?.id ?? null;
+        return {
+          ...applyStations(prev, BOOTSTRAP_STATIONS),
+          currentStationId,
+          isPlaying: prev.isPlaying || (prev.hasStarted && Boolean(currentStationId)),
+          isCached: true,
+          loadProgress: "正在更新电台列表...",
+        };
+      });
+    }
+
+    // 1. Load cached data first (instant)。过滤黑名单：旧缓存可能含已拉黑的死台，
+    // 且合并逻辑只增不删，不在此剔除会让死台随缓存永久留存。
+    const cachedRaw = await loadCachedStations();
+    const cached = cachedRaw?.filter((s) => !(s.streamUrl && isBlockedStream(s.streamUrl))) ?? null;
+    // 合并而非替换：bootstrap 兜底台已先占位（stations.length>0），
+    // 不能再用 length===0 拦截，否则缓存的几千个台永远加载不进来、地球只剩几颗点。
+    if (cached && cached.length > 0) {
+      set((prev) => {
+        const merged = new Map(prev.stationMap);
+        for (const s of cached) merged.set(s.id, s);
+        const stations = Array.from(merged.values());
+        return {
+          ...applyStations(prev, stations),
+          isCached: true,
+          hasRealData: true,
+          loadProgress: `已加载 ${stations.length} 个缓存电台`,
+        };
+      });
     }
 
     // 2. Fetch fresh data progressively
@@ -250,6 +283,7 @@ export const useRadio = create<RadioState>((set, get) => ({
             return {
               ...applyStations(prev, stations),
               isCached: false,
+              hasRealData: true,
               loadProgress: `已加载 ${stations.length} 个电台...`,
             };
           });
@@ -273,6 +307,7 @@ export const useRadio = create<RadioState>((set, get) => ({
           return {
             ...applyStations(prev, stations),
             isCached: false,
+            hasRealData: true,
             loadProgress: `已加载 ${stations.length} 个电台...`,
           };
         });

@@ -45,10 +45,12 @@ export default function AudioEngine() {
         onError: (kind) => {
           if (kind === "offline") {
             useRadio.getState().setPlaybackError({ type: "offline", message: "已停播" });
-            scheduleAutoSkip();
           } else {
             useRadio.getState().setPlaybackError({ type: "error", message: "播放失败" });
           }
+          // 死流既可能返回停播页(offline)，也可能直接连接失败(error)。
+          // 两种都自动跳台，避免用户卡在无法播放的电台上(尤其是落地默认台)。
+          scheduleAutoSkip();
           useRadio.setState({ isPlaying: false });
         },
         onRemoteNext: () => useRadio.getState().next(),

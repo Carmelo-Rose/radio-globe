@@ -36,6 +36,10 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // HLS 解码模块：@mediagrid/capacitor-native-audio 只引了 media3-exoplayer(基础)，
+    // 未带 HLS。国内电台流(0472 → .m3u8)全是 HLS，缺此模块时 ExoPlayer 会因
+    // ClassNotFoundException: HlsMediaSource$Factory 而无声。版本须与插件的 media3 对齐(1.9.0)。
+    implementation "androidx.media3:media3-exoplayer-hls:1.9.0"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

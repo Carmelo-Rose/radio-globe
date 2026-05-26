@@ -11,6 +11,23 @@ const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", feature
 const RETICLE_RADIUS_PX = 40;
 const SNAP_DURATION_MS = 260;
 
+// 落地默认台：优先选稳定可播的具体源，避免同名电台里排在前面的坏源被选中。
+const DEFAULT_STATION_CANDIDATES = [
+  { name: "中国之声", streamIncludes: "radio.0472.org/?id=639" },
+  { name: "音乐之声", streamIncludes: "radio.0472.org/?id=641" },
+  { name: "北京新闻广播", streamIncludes: "radio.0472.org/?id=353" },
+];
+
+function pickDefaultStation(stations: Station[], lng: number, lat: number): Station | null {
+  for (const candidate of DEFAULT_STATION_CANDIDATES) {
+    const station = stations.find(
+      (s) => s.name === candidate.name && s.streamUrl?.includes(candidate.streamIncludes)
+    );
+    if (station) return station;
+  }
+  return nearestStation(stations, lng, lat);
+}
+
 function stationsToFC(stations: Station[]): GeoJSON.FeatureCollection {
   return {
     type: "FeatureCollection",
@@ -80,6 +97,7 @@ export default function RadioMap() {
   const snapFrameRef = useRef<number | null>(null);
   const stationCountRef = useRef(0);
   const autoTunedRef = useRef(false);
+  const draggingRef = useRef(false);
 
   const currentId = useRadio((s) => s.currentStationId);
   const currentIdRef = useRef(currentId);
@@ -245,6 +263,7 @@ export default function RadioMap() {
 
       const scanReticleForStation = () => {
         snapFrameRef.current = null;
+        if (draggingRef.current) return;
         if (flyToActiveRef.current) return;
         if (useRadio.getState().isPinned) return;
         if (useRadio.getState().stations.length === 0) return;
@@ -256,6 +275,23 @@ export default function RadioMap() {
         if (snapFrameRef.current != null || flyToActiveRef.current) return;
         snapFrameRef.current = requestAnimationFrame(scanReticleForStation);
       };
+
+      // 用户主动拖动时：标记拖动中并释放 flyToActiveRef 锁，让拖动结束后的 moveend
+      // 能正常触发磁吸。否则冷启动选中默认台后的 5.5s flyTo 锁会让磁吸全程被
+      // scanReticleForStation 的 early-return 跳过，表现为“划不动/没磁吸”。
+      // 注意：不要在此调用 map.stop()——它会打断相机动画并立刻触发一次 moveend，
+      // 在拖动过程中就把地图吸附拽回，反而表现为“一拖就锁死”。用户拖动本身已会
+      // 自动打断进行中的 easeTo/flyTo，无需手动 stop。
+      map.on("dragstart", () => {
+        draggingRef.current = true;
+        if (flyToTimerRef.current) clearTimeout(flyToTimerRef.current);
+        flyToActiveRef.current = false;
+      });
+      // dragend 在指针抬起时触发，早于惯性结束的 moveend；此时解除拖动标记，
+      // 让随后的 moveend 扫描得以吸附到准星圈内最近的台。
+      map.on("dragend", () => {
+        draggingRef.current = false;
+      });
 
       // Radio Garden 风格的磁吸：仅在停止拖动后吸附，避免拖动中被中心圈反复拉回。
       map.on("moveend", queueReticleScan);
@@ -274,7 +310,7 @@ export default function RadioMap() {
       // Fallback auto-tune (若渐进更新尚未选中任何台)
       if (!autoTunedRef.current && !useRadio.getState().currentStationId) {
         const c = map.getCenter();
-        const near = nearestStation(stations, c.lng, c.lat);
+        const near = pickDefaultStation(stations, c.lng, c.lat);
         if (near) {
           autoTunedRef.current = true;
           snapStationToReticle(near.id, "tune");
@@ -346,7 +382,7 @@ export default function RadioMap() {
     // 避免初始长时间“加载中 / 旋转地球”的空状态。
     if (!autoTunedRef.current && !useRadio.getState().currentStationId && stations.length > 0) {
       const c = map.getCenter();
-      const near = nearestStation(stations, c.lng, c.lat);
+      const near = pickDefaultStation(stations, c.lng, c.lat);
       if (near) {
         autoTunedRef.current = true;
         useRadio.getState().setCurrent(near.id, "tune");

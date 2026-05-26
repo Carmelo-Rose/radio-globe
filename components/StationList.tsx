@@ -12,6 +12,8 @@ export default function StationList() {
   const currentStationId = useRadio((s) => s.currentStationId);
   const favorites = useRadio((s) => s.favorites);
   const stations = useRadio((s) => s.stations);
+  const listFilter = useRadio((s) => s.listFilter);
+  const favoritesOnly = listFilter === "favorites";
 
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -23,7 +25,7 @@ export default function StationList() {
 
   const filtered = useMemo(() => {
     const q = debounced.toLowerCase().trim();
-    let list = stations;
+    let list = favoritesOnly ? stations.filter((s) => favorites.has(s.id)) : stations;
     if (q) {
       list = stations.filter(
         (s) =>
@@ -40,7 +42,7 @@ export default function StationList() {
       if (fa !== fb) return fa - fb;
       return a.name.localeCompare(b.name);
     });
-  }, [stations, favorites, debounced]);
+  }, [stations, favorites, debounced, favoritesOnly]);
 
   const visible = filtered.slice(0, PAGE_SIZE);
   const hasMore = filtered.length > PAGE_SIZE;
@@ -62,15 +64,18 @@ export default function StationList() {
         <button className="list-close" onClick={() => setShowList(false)} aria-label="关闭">
           ×
         </button>
-        <h2>所有电台</h2>
-        <div className="sub">共 {stations.length} 个 · {debounced ? `过滤 ${filtered.length} 个` : "搜索电台名/城市/国家"}</div>
+        <h2>{favoritesOnly ? "我的收藏" : "所有电台"}</h2>
+        <div className="sub">
+          {favoritesOnly
+            ? `${favorites.size} 个收藏 · ${debounced ? `过滤 ${filtered.length} 个` : "搜索已收藏的电台"}`
+            : `共 ${stations.length} 个 · ${debounced ? `过滤 ${filtered.length} 个` : "搜索电台名/城市/国家"}`}
+        </div>
         <input
           className="list-search"
           type="text"
-          placeholder="搜索电台..."
+          placeholder={favoritesOnly ? "搜索收藏..." : "搜索电台..."}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          autoFocus
         />
         <div className="list-scroll">
           {visible.map((s) => (
@@ -93,6 +98,9 @@ export default function StationList() {
           )}
           {filtered.length === 0 && debounced && (
             <div className="list-more">没有找到匹配的电台</div>
+          )}
+          {filtered.length === 0 && !debounced && favoritesOnly && (
+            <div className="list-more">还没有收藏电台 · 点♡即可收藏</div>
           )}
         </div>
       </div>

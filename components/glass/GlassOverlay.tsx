@@ -59,6 +59,7 @@ function formatCoord(lng: number, lat: number): string {
 // ---- Top centre meta --------------------------------------------------------
 function GlassTopMeta() {
   const count = useRadio((s) => s.stations.length);
+  const hasRealData = useRadio((s) => s.hasRealData);
   return (
     <div
       style={{
@@ -73,7 +74,9 @@ function GlassTopMeta() {
       <HairlineLabel color={GLASS.accent}>● Earth Radio</HairlineLabel>
       <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.12)" }} />
       <HairlineLabel>v 2.6</HairlineLabel>
-      <HairlineLabel color={GLASS.dim}>· {count.toLocaleString()} stations</HairlineLabel>
+      <HairlineLabel color={GLASS.dim}>
+        {hasRealData ? `· ${count.toLocaleString()} stations` : "· 加载中…"}
+      </HairlineLabel>
     </div>
   );
 }
@@ -82,6 +85,7 @@ function GlassTopMeta() {
 function GlassLocationCard() {
   const station = useRadio((s) => s.stationMap.get(s.currentStationId ?? ""));
   const count = useRadio((s) => s.stations.length);
+  const hasRealData = useRadio((s) => s.hasRealData);
   const isPlaying = useRadio((s) => s.isPlaying);
 
   const [now, setNow] = useState<Date | null>(null);
@@ -136,7 +140,7 @@ function GlassLocationCard() {
       <div style={{ marginTop: 14, display: "flex", gap: 18, alignItems: "center" }}>
         <Spectrum bars={28} height={18} color={GLASS.accent} width={140} gap={3} />
         <div style={{ font: `300 11px/1.4 ${FONT_MONO}`, color: GLASS.dim, letterSpacing: "0.08em" }}>
-          {count.toLocaleString()} STATIONS
+          {hasRealData ? `${count.toLocaleString()} STATIONS` : "加载中…"}
           <br />
           <span style={{ color: GLASS.accent }}>
             ● {isPlaying ? "ON AIR" : "PAUSED"} · {time}
@@ -149,7 +153,7 @@ function GlassLocationCard() {
 
 // ---- Left nav rail ----------------------------------------------------------
 function GlassNav() {
-  const setShowList = useRadio((s) => s.setShowList);
+  const openList = useRadio((s) => s.openList);
   const items = [
     { k: "explore", ico: "circle", label: "探索" },
     { k: "favs", ico: "heart", label: "收藏" },
@@ -177,7 +181,8 @@ function GlassNav() {
             key={it.k}
             onClick={() => {
               setActive(it.k);
-              if (it.k === "browse" || it.k === "search" || it.k === "favs") setShowList(true);
+              if (it.k === "favs") openList("favorites");
+              else if (it.k === "browse" || it.k === "search") openList("all");
             }}
             style={{
               all: "unset",

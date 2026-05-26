@@ -24,7 +24,7 @@ const fmtKm = (km: number) => (km < 10 ? `${km.toFixed(1)} km` : `${Math.round(k
 
 // ---- Top header: brand pill + search pill -----------------------------------
 function MHeader() {
-  const setShowList = useRadio((s) => s.setShowList);
+  const openList = useRadio((s) => s.openList);
   return (
     <div
       style={{
@@ -40,7 +40,7 @@ function MHeader() {
         <span style={{ font: `300 10px/1 ${FONT_MONO}`, color: GLASS.ink, letterSpacing: "0.22em" }}>EARTH RADIO</span>
       </div>
       <button
-        onClick={() => setShowList(true)}
+        onClick={() => openList("all")}
         aria-label="搜索"
         style={{ all: "unset", cursor: "pointer", ...glassPanel, padding: "9px 11px", borderRadius: 999, display: "flex", alignItems: "center", color: GLASS.ink }}
       >
@@ -54,6 +54,7 @@ function MHeader() {
 function MHeadline() {
   const station = useRadio((s) => s.stationMap.get(s.currentStationId ?? ""));
   const count = useRadio((s) => s.stations.length);
+  const hasRealData = useRadio((s) => s.hasRealData);
   const coord = station ? formatCoord(station.lng, station.lat) : "--";
   return (
     <div style={{ padding: "18px 20px 0" }}>
@@ -78,7 +79,9 @@ function MHeadline() {
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
         <HairlineLabel color={GLASS.faint}>{coord}</HairlineLabel>
-        <HairlineLabel color={GLASS.accent}>● {count.toLocaleString()} stations</HairlineLabel>
+        <HairlineLabel color={GLASS.accent}>
+          {hasRealData ? `● ${count.toLocaleString()} stations` : "● 加载中…"}
+        </HairlineLabel>
       </div>
     </div>
   );
@@ -286,6 +289,7 @@ function MNowPlaying() {
 // ---- Bottom tab bar (Material 3) --------------------------------------------
 function MTabBar() {
   const setShowList = useRadio((s) => s.setShowList);
+  const openList = useRadio((s) => s.openList);
   const items = [
     { k: "explore", ico: "globe", label: "探索" },
     { k: "favs", ico: "heart", label: "收藏" },
@@ -315,7 +319,8 @@ function MTabBar() {
             key={it.k}
             onClick={() => {
               setActive(it.k);
-              if (it.k === "browse" || it.k === "search" || it.k === "favs") setShowList(true);
+              if (it.k === "favs") openList("favorites");
+              else if (it.k === "browse" || it.k === "search") openList("all");
               else setShowList(false);
             }}
             style={{

@@ -1,12 +1,7 @@
 import type { Station } from "./stations";
-import {
-  matchCity,
-  matchProvince,
-  isNationalStation,
-  nationalCenter,
-  fallbackCity,
-  cityJitter,
-} from "./cnGeo";
+// cnGeo 的 matchCity/matchProvince 等已移入 chinaRadioData.ts 的生成脚本中，
+// 静态数据已包含坐标，运行时不再需要 cnGeo。
+import { CHINA_RADIO_STATIONS } from "./chinaRadioData";
 
 export type ApiStation = {
   stationuuid: string;
@@ -70,18 +65,24 @@ const BLOCKED_URL_PATTERNS = [
   "rocket.streamradio.fr",   // AAAudio Luxembourg - 502
   "minimw.imbc.com",         // MBC FM Korea - token expired (400)
   "ice5.somafm.com",         // SomaFM - proxy incompatible
+  "lishui-tv-hls.cm.jstv.com", // 南京溧水 YO!FM - TV HLS，token 鉴权+10Mbps，手机 ExoPlayer 播不动
+  "hls.njgb.com/live_hls/2", // 南京交通广播旧 HLS 源，移动端首播经常超时
 ];
 
 const BLOCKED_STATION_NAMES = new Set([
   "Gagasi FM", // South Africa - 404
 ]);
 
+export function isBlockedStream(url: string): boolean {
+  return BLOCKED_URL_PATTERNS.some((p) => url.includes(p));
+}
+
 const STATION_FILTER = (s: ApiStation) =>
   s.lastcheckok === 1 &&
   s.geo_lat != null &&
   s.geo_long != null &&
   (s.url_resolved || s.url) &&
-  !BLOCKED_URL_PATTERNS.some((p) => (s.url_resolved || s.url).includes(p)) &&
+  !isBlockedStream(s.url_resolved || s.url) &&
   !BLOCKED_STATION_NAMES.has(s.name);
 
 export async function fetchAllStations(): Promise<ApiStation[]> {
@@ -177,86 +178,25 @@ export async function fetchStationsNearby(
   return [];
 }
 
-// ---------- Fetch China stations (real, with city geo) ----------
+// ---------- Fetch China stations (built-in from fanmingming/live) ----------
 
 /**
- * 拉取中国电台（流均经 hidebroken 校验可播放），并用台名里的城市补真实坐标。
- * radio-browser 的中国台大多没有 geo/state，所以靠"台名含城市"匹配 CN_CITIES。
- * 已自带坐标的台则直接用其真实坐标。
+ * 返回内置的中国电台列表。
+ *
+ * 数据来源：fanmingming/live 社区维护的 fm.m3u（GitHub 28k+ stars）
+ * 流地址：radio.0472.org 中转 → 央广(CNR)/各省台官方 HLS 直播流
+ *
+ * 替代了之前的 radio-browser.info API 调用（countrycode=CN），
+ * 原因：radio-browser 服务器在欧美，国内设备访问极慢或超时。
+ * 现在瞬间返回，不再依赖海外 API。
+ *
+ * 全球电台仍通过 fetchAllStationsPages() 从 radio-browser.info 获取。
+ * 两者 id 体系不同（cn-* vs stationuuid），Map 去重不会冲突。
+ *
+ * @see lib/chinaRadioData.ts — 静态数据文件
  */
 export async function fetchChinaStations(): Promise<Station[]> {
-  await resolveServers();
-
-  const params = new URLSearchParams({
-    countrycode: "CN",
-    hidebroken: "true",
-    order: "clickcount",
-    reverse: "true",
-    limit: "1000",
-  });
-
-  let data: ApiStation[] = [];
-  for (let attempt = 0; attempt < Math.min(3, servers.length); attempt++) {
-    const base = nextServer();
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 15000);
-      const res = await fetch(`${base}/json/stations/search?${params}`, {
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-      if (!res.ok) continue;
-      data = await res.json();
-      break;
-    } catch {
-      continue;
-    }
-  }
-
-  const out: Station[] = [];
-  for (const s of data) {
-    if (s.lastcheckok !== 1) continue;
-    const stream = s.url_resolved || s.url;
-    if (!stream) continue;
-
-    let lng: number;
-    let lat: number;
-    let city: string;
-
-    if (s.geo_lat != null && s.geo_long != null) {
-      // 自带真实坐标
-      lng = s.geo_long;
-      lat = s.geo_lat;
-      city = s.state || "中国";
-    } else {
-      // 依次尝试：城市名 -> 省份(省会) -> 全国性台(北京) -> 兜底散布到真实城市
-      const m =
-        matchCity(s.name) ||
-        matchProvince(s.name) ||
-        (isNationalStation(s.name) ? nationalCenter() : null) ||
-        fallbackCity(s.stationuuid);
-      const [dx, dy] = cityJitter(s.stationuuid);
-      lng = m.lng + dx;
-      lat = m.lat + dy;
-      city = m.city;
-    }
-
-    const tags = s.tags
-      ? s.tags.split(",").map((t) => t.trim()).filter(Boolean)
-      : [];
-    out.push({
-      id: s.stationuuid,
-      name: s.name,
-      city,
-      country: "中国",
-      lng,
-      lat,
-      timeZone: "Asia/Shanghai",
-      genre: tags.slice(0, 2).join(", ") || "综合",
-      streamUrl: stream,
-    });
-  }
-  return out;
+  return CHINA_RADIO_STATIONS;
 }
 
 // ---------- Timezone approximation ----------
