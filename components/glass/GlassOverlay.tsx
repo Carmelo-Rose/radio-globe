@@ -75,7 +75,7 @@ function GlassTopMeta() {
       <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.12)" }} />
       <HairlineLabel>v 2.6</HairlineLabel>
       <HairlineLabel color={GLASS.dim}>
-        {hasRealData ? `· ${count.toLocaleString()} stations` : "· 加载中…"}
+        {hasRealData ? `· ${count.toLocaleString()} 个电台` : "· 加载中…"}
       </HairlineLabel>
     </div>
   );
@@ -116,7 +116,7 @@ function GlassLocationCard() {
   return (
     <div style={{ ...glassPanel, padding: "20px 24px", minWidth: 320 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <HairlineLabel>Now tuned</HairlineLabel>
+        <HairlineLabel>正在收听</HairlineLabel>
         <HairlineLabel color={GLASS.faint}>{coord}</HairlineLabel>
       </div>
       <div style={{ marginTop: 14, display: "flex", alignItems: "baseline", gap: 12 }}>
@@ -134,16 +134,16 @@ function GlassLocationCard() {
           {station?.city ?? "旋转地球"}
         </div>
         <div style={{ font: `300 12px/1 ${FONT_MONO}`, color: GLASS.dim, letterSpacing: "0.1em" }}>
-          {station?.country ?? "EXPLORE"}
+          {station?.country ?? "探索"}
         </div>
       </div>
       <div style={{ marginTop: 14, display: "flex", gap: 18, alignItems: "center" }}>
         <Spectrum bars={28} height={18} color={GLASS.accent} width={140} gap={3} />
         <div style={{ font: `300 11px/1.4 ${FONT_MONO}`, color: GLASS.dim, letterSpacing: "0.08em" }}>
-          {hasRealData ? `${count.toLocaleString()} STATIONS` : "加载中…"}
+          {hasRealData ? `${count.toLocaleString()} 个电台` : "加载中…"}
           <br />
           <span style={{ color: GLASS.accent }}>
-            ● {isPlaying ? "ON AIR" : "PAUSED"} · {time}
+            ● {isPlaying ? "播放中" : "已暂停"} · {time}
           </span>
         </div>
       </div>
@@ -226,7 +226,7 @@ function GlassNearbyList() {
     return nearbyStations(stations, station.lng, station.lat, 6, station.id);
   }, [stations, station]);
 
-  const fmtKm = (km: number) => (km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`);
+  const fmtKm = (km: number) => (km < 10 ? `${km.toFixed(1)} 公里` : `${Math.round(km)} 公里`);
 
   return (
     <div style={{ ...glassPanel, padding: "18px 20px", width: 270 }}>
@@ -238,7 +238,7 @@ function GlassNearbyList() {
           marginBottom: 14,
         }}
       >
-        <HairlineLabel>Nearby</HairlineLabel>
+        <HairlineLabel>附近</HairlineLabel>
         <HairlineLabel color={GLASS.accent}>● {nearby.length}</HairlineLabel>
       </div>
       {nearby.length === 0 && (
@@ -373,7 +373,7 @@ function GlassCompass() {
           borderRadius: 2,
         }}
       />
-      <div style={{ font: `500 13px/1 ${FONT_SANS}`, color: GLASS.ink }}>N</div>
+      <div style={{ font: `500 13px/1 ${FONT_SANS}`, color: GLASS.ink }}>北</div>
     </div>
   );
 }
@@ -396,10 +396,10 @@ function GlassPlayer() {
   const isFav = station ? favorites.has(station.id) : false;
 
   const status = playbackError
-    ? playbackError.message.toUpperCase()
+    ? playbackError.message
     : isPlaying
-      ? "LIVE"
-      : "PAUSED";
+      ? "直播"
+      : "已暂停";
   const statusColor = playbackError ? "#ff7a7a" : GLASS.dim;
 
   return (
@@ -456,7 +456,7 @@ function GlassPlayer() {
             textTransform: "uppercase",
           }}
         >
-          {station ? `${station.city} · ${station.genre || "RADIO"}` : "正在获取电台数据"}
+          {station ? `${station.city} · ${station.genre || "电台"}` : "正在获取电台数据"}
         </div>
       </div>
       <div style={{ width: 1, height: 30, background: "rgba(255,255,255,0.1)" }} />

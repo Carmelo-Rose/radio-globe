@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { GLOBAL_FALLBACK_STATIONS } from "./globalFallbackStations";
 import { BOOTSTRAP_STATIONS, type Station } from "./stations";
 import { fetchAllStationsPages, fetchChinaStations, toStation, isBlockedStream } from "./radioApi";
 import { filterHiddenChinaStations, isChinaRadioStationHidden } from "./chinaRadioHealth";
@@ -28,6 +29,7 @@ type RadioState = {
   isPinned: boolean;
 
   setCurrent: (id: string | null, source: "tune" | "select") => void;
+  seedBootstrapStations: () => void;
   start: () => void;
   togglePlay: () => void;
   next: () => void;
@@ -130,6 +132,42 @@ function applyStations(prev: RadioState, stations: Station[]): Partial<RadioStat
   return { stations, stationMap, currentStationId };
 }
 
+function isNonBuiltinChinaStation(s: Station): boolean {
+  return (s.country === "China" || s.country === "中国") && !s.id.startsWith("cn-0472-");
+}
+
+function seedBootstrapPatch(prev: RadioState): Partial<RadioState> {
+  const merged = new Map(prev.stationMap);
+  for (const station of BOOTSTRAP_STATIONS) merged.set(station.id, station);
+  const stations = Array.from(merged.values());
+  let currentStationId = prev.currentStationId;
+  const currentStation = currentStationId ? merged.get(currentStationId) : undefined;
+  if (!currentStation?.streamUrl) {
+    currentStationId = BOOTSTRAP_STATIONS[0]?.id ?? null;
+  }
+
+  return {
+    ...applyStations({ ...prev, currentStationId }, stations),
+    currentStationId,
+    isPlaying: prev.isPlaying || (prev.hasStarted && Boolean(currentStationId)),
+    isCached: prev.hasRealData ? prev.isCached : true,
+  };
+}
+
+function seedGlobalFallbackPatch(prev: RadioState): Partial<RadioState> {
+  const merged = new Map(prev.stationMap);
+  for (const station of GLOBAL_FALLBACK_STATIONS) {
+    if (!merged.has(station.id)) merged.set(station.id, station);
+  }
+  const stations = Array.from(merged.values());
+
+  return {
+    ...applyStations(prev, stations),
+    hasRealData: true,
+    loadProgress: `已加载 ${stations.length} 个内置全球电台，正在更新...`,
+  };
+}
+
 export const useRadio = create<RadioState>((set, get) => ({
   currentStationId: null,
   hasStarted: false,
@@ -170,9 +208,25 @@ export const useRadio = create<RadioState>((set, get) => ({
     });
   },
 
+  seedBootstrapStations: () => {
+    set((prev) => seedBootstrapPatch(prev));
+  },
+
   start: () => {
-    const { currentStationId } = get();
-    set({ hasStarted: true, isPlaying: Boolean(currentStationId), playbackError: null });
+    set((prev) => {
+      const currentStation = prev.currentStationId
+        ? prev.stationMap.get(prev.currentStationId)
+        : undefined;
+      const patch = currentStation?.streamUrl ? {} : seedBootstrapPatch(prev);
+      const currentStationId = (patch.currentStationId ?? prev.currentStationId) as string | null;
+      const stationMap = (patch.stationMap ?? prev.stationMap) as Map<string, Station>;
+      return {
+        ...patch,
+        hasStarted: true,
+        isPlaying: Boolean(currentStationId && stationMap.get(currentStationId)?.streamUrl),
+        playbackError: null,
+      };
+    });
   },
 
   togglePlay: () => {
@@ -240,12 +294,8 @@ export const useRadio = create<RadioState>((set, get) => ({
     // 先放入少量确认可播的内置台，保证用户点开始后立刻有声源。
     if (get().stations.length === 0) {
       set((prev) => {
-        const currentStationId = prev.currentStationId ?? BOOTSTRAP_STATIONS[0]?.id ?? null;
         return {
-          ...applyStations(prev, BOOTSTRAP_STATIONS),
-          currentStationId,
-          isPlaying: prev.isPlaying || (prev.hasStarted && Boolean(currentStationId)),
-          isCached: true,
+          ...seedBootstrapPatch(prev),
           loadProgress: "正在更新电台列表...",
         };
       });
@@ -257,7 +307,9 @@ export const useRadio = create<RadioState>((set, get) => ({
     const cached =
       cachedRaw
         ? filterHiddenChinaStations(
-            cachedRaw.filter((s) => !(s.streamUrl && isBlockedStream(s.streamUrl)))
+            cachedRaw.filter(
+              (s) => !isNonBuiltinChinaStation(s) && !(s.streamUrl && isBlockedStream(s.streamUrl))
+            )
           )
         : null;
     // 合并而非替换：bootstrap 兜底台已先占位（stations.length>0），
@@ -275,6 +327,11 @@ export const useRadio = create<RadioState>((set, get) => ({
         };
       });
     }
+
+    // radio-browser sits outside mainland China and often times out on mobile
+    // networks. Seed a compact global snapshot so native builds never collapse
+    // to China-only dots while the live API is retrying or unavailable.
+    set((prev) => seedGlobalFallbackPatch(prev));
 
     // 2. Fetch fresh data progressively
     try {

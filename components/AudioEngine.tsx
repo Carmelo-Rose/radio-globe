@@ -77,6 +77,15 @@ export default function AudioEngine() {
     player?.setVolume(volume);
   }, [player, volume]);
 
+  // Prepare the selected station before the user presses play when possible.
+  useEffect(() => {
+    if (!player || isPlaying || !station?.streamUrl) return;
+    void player.warmUp(station.streamUrl, {
+      title: station.name,
+      subtitle: [station.city, station.country].filter(Boolean).join(" · "),
+    });
+  }, [player, isPlaying, station?.streamUrl, station?.name, station?.city, station?.country]);
+
   // Clear pending auto-skip whenever the station changes
   useEffect(() => {
     clearAutoSkip();

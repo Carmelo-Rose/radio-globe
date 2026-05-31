@@ -78,8 +78,13 @@ export function isBlockedStream(url: string): boolean {
   return BLOCKED_URL_PATTERNS.some((p) => url.includes(p));
 }
 
+function isChinaApiStation(s: Pick<ApiStation, "country" | "countrycode">): boolean {
+  return s.countrycode === "CN" || s.country === "China" || s.country === "中国";
+}
+
 const STATION_FILTER = (s: ApiStation) =>
   s.lastcheckok === 1 &&
+  !isChinaApiStation(s) &&
   s.geo_lat != null &&
   s.geo_long != null &&
   (s.url_resolved || s.url) &&

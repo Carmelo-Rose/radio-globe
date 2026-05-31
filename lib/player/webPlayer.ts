@@ -57,6 +57,7 @@ export class WebPlayer implements RadioPlayer {
   private markFailedRunning = false;
   private volume = 1;
   private stallTimer: ReturnType<typeof setTimeout> | null = null;
+  private warmUps = new Map<string, Promise<void>>();
 
   constructor() {
     this.audio = new Audio();
@@ -171,6 +172,32 @@ export class WebPlayer implements RadioPlayer {
         this.destroyHls();
       }
     });
+  }
+
+  warmUp(url: string, _meta: PlayerMeta): Promise<void> {
+    if (this.currentUrl === url) return Promise.resolve();
+    const existing = this.warmUps.get(url);
+    if (existing) return existing;
+
+    const next = (async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3500);
+      try {
+        const res = await fetch(`/api/stream?url=${encodeURIComponent(url)}`, {
+          signal: ctrl.signal,
+          cache: "no-store",
+        });
+        await res.body?.cancel();
+      } catch {
+        // Warm-up is opportunistic; real playback owns error handling.
+      } finally {
+        clearTimeout(timer);
+        this.warmUps.delete(url);
+      }
+    })();
+
+    this.warmUps.set(url, next);
+    return next;
   }
 
   async play(url: string, _meta: PlayerMeta): Promise<void> {

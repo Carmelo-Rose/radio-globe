@@ -20,7 +20,7 @@ function formatCoord(lng: number, lat: number): string {
   return `${fmt(lat, "N", "S")} · ${fmt(lng, "E", "W")}`;
 }
 
-const fmtKm = (km: number) => (km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`);
+const fmtKm = (km: number) => (km < 10 ? `${km.toFixed(1)} 公里` : `${Math.round(km)} 公里`);
 
 // ---- Top header: brand pill + search pill -----------------------------------
 function MHeader() {
@@ -58,7 +58,7 @@ function MHeadline() {
   const coord = station ? formatCoord(station.lng, station.lat) : "--";
   return (
     <div style={{ padding: "18px 20px 0" }}>
-      <HairlineLabel>Now tuning</HairlineLabel>
+      <HairlineLabel>正在收听</HairlineLabel>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 8 }}>
         <div
           style={{
@@ -74,13 +74,13 @@ function MHeadline() {
           {station?.city ?? "旋转地球"}
         </div>
         <div style={{ font: `300 11px/1 ${FONT_MONO}`, color: GLASS.dim, letterSpacing: "0.15em" }}>
-          {station?.country ?? "EXPLORE"}
+          {station?.country ?? "探索"}
         </div>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
         <HairlineLabel color={GLASS.faint}>{coord}</HairlineLabel>
         <HairlineLabel color={GLASS.accent}>
-          {hasRealData ? `● ${count.toLocaleString()} stations` : "● 加载中…"}
+          {hasRealData ? `● ${count.toLocaleString()} 个电台` : "● 加载中…"}
         </HairlineLabel>
       </div>
     </div>
@@ -142,7 +142,7 @@ function MMapControls() {
         }}
       >
         <div style={{ position: "absolute", top: 5, left: "50%", transform: "translateX(-50%)", width: 2, height: 10, background: GLASS.accent, borderRadius: 2 }} />
-        <div style={{ font: `500 11px/1 ${FONT_SANS}` }}>N</div>
+        <div style={{ font: `500 11px/1 ${FONT_SANS}` }}>北</div>
       </div>
     </div>
   );
@@ -165,8 +165,8 @@ function MNearbyChips() {
   return (
     <div style={{ padding: "0 16px", pointerEvents: "auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 4px" }}>
-        <HairlineLabel>Nearby · 0–40km</HairlineLabel>
-        <HairlineLabel color={GLASS.accent}>● {nearby.length} in range</HairlineLabel>
+        <HairlineLabel>附近 · 0–40 公里</HairlineLabel>
+        <HairlineLabel color={GLASS.accent}>● {nearby.length} 个在范围内</HairlineLabel>
       </div>
       <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "4px 0", scrollbarWidth: "none" }}>
         {nearby.map((s) => {
@@ -188,7 +188,7 @@ function MNearbyChips() {
               }}
             >
               <div style={{ font: `300 11px/1 ${FONT_MONO}`, color: on ? GLASS.accent : GLASS.dim, letterSpacing: "0.1em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>
-                {s.genre || "RADIO"}
+                {s.genre || "电台"}
               </div>
               <div style={{ font: `500 13px/1.25 ${FONT_SANS}`, color: GLASS.ink, marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 130 }}>
                 {s.name}
@@ -216,7 +216,7 @@ function MNowPlaying() {
   const togglePin = useRadio((s) => s.togglePin);
 
   const isFav = station ? favorites.has(station.id) : false;
-  const status = playbackError ? playbackError.message.toUpperCase() : isPlaying ? "LIVE" : "PAUSED";
+  const status = playbackError ? playbackError.message : isPlaying ? "直播" : "已暂停";
   const statusColor = playbackError ? "#ff7a7a" : GLASS.dim;
 
   return (
@@ -241,8 +241,8 @@ function MNowPlaying() {
           <div style={{ font: `500 15px/1.2 ${FONT_SANS}`, color: GLASS.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {station?.name ?? "加载中..."}
           </div>
-          <div style={{ font: `300 10px/1 ${FONT_MONO}`, color: statusColor, marginTop: 5, letterSpacing: "0.14em", textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {station ? `${station.genre || "RADIO"} · ● ${status}` : "正在获取电台数据"}
+          <div style={{ font: `300 10px/1 ${FONT_MONO}`, color: statusColor, marginTop: 5, letterSpacing: "0.14em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {station ? `${station.genre || "电台"} · ● ${status}` : "正在获取电台数据"}
           </div>
         </div>
         <button

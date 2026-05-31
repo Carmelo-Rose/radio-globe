@@ -298,8 +298,12 @@ export default function RadioMap() {
       // Radio Garden 风格的磁吸：仅在停止拖动后吸附，避免拖动中被中心圈反复拉回。
       map.on("moveend", queueReticleScan);
 
-      // Fetch ALL stations once
-      await useRadio.getState().fetchAll();
+      // Fetch is started by StationBootstrap; keep this as a fallback for
+      // isolated map mounts without duplicating the full startup request.
+      const radio = useRadio.getState();
+      if (!radio.isLoading && radio.stations.length === 0) {
+        await radio.fetchAll();
+      }
       if (!mounted) return;
 
       // Update map sources with all stations

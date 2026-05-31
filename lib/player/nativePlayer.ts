@@ -13,6 +13,7 @@ const STALL_CHECK_INTERVAL = 18000;
 // onAudioEnd 宽限期：直播流的"结束"多为缓冲中断/不连续，ExoPlayer 通常会自行恢复。
 // 等这段时间再核实是否真没在播，避免一掉线就闪"播放失败"。
 const END_GRACE = 6000;
+const resolvedStreamUrls = new Map<string, Promise<string>>();
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,19 +29,30 @@ function wait(ms: number): Promise<void> {
  * 非 0472 地址（已带扩展名的直链）原样返回。
  */
 async function resolveStreamUrl(url: string): Promise<string> {
-  if (!url.includes("radio.0472.org")) return url;
-  try {
+  if (!url.includes("radio.0472.org")) return Promise.resolve(url);
+  const cached = resolvedStreamUrls.get(url);
+  if (cached) return cached;
+
+  const next = (async () => {
     // 必须走 CapacitorHttp（原生 HTTP）而非 WebView fetch：0472 从 https 跳到 http，
     // WebView 在 https 上下文里会按 mixed-content 拦截跳转，fetch 拿不到最终地址。
     // disableRedirects 让原生返回 302 本身，从 Location 头读取真实 .m3u8 地址
     // （Java HttpURLConnection 默认也不跟随 https→http 跨协议跳转）。
-    const res = await CapacitorHttp.get({ url, disableRedirects: true });
-    const headers = res.headers ?? {};
-    const loc = headers.Location ?? headers.location;
-    return loc || res.url || url;
-  } catch {
-    return url;
-  }
+    try {
+      const res = await CapacitorHttp.get({ url, disableRedirects: true });
+      const headers = res.headers ?? {};
+      const loc = headers.Location ?? headers.location;
+      return loc || res.url || url;
+    } catch {
+      return url;
+    }
+  })();
+
+  resolvedStreamUrls.set(url, next);
+  next.then((resolved) => {
+    if (resolved === url) resolvedStreamUrls.delete(url);
+  });
+  return next;
 }
 
 /** 原生端无 CORS：直接探测流，返回 HTML 多为停播页。 */
@@ -75,7 +87,9 @@ export class NativePlayer implements RadioPlayer {
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private stallTimer: ReturnType<typeof setTimeout> | null = null;
   private requestSeq = 0;
+  private warmSeq = 0;
   private suppressPauseEventsUntil = 0;
+  private loadedSource: string | null = null;
   // 串行化原生操作：连续切台时多个 play() 并发会让 changeAudioSource 乱序，
   // 最终 play() 时原生音源可能还停在上一台。用一条 promise 链强制顺序执行。
   private opChain: Promise<void> = Promise.resolve();
@@ -229,13 +243,47 @@ export class NativePlayer implements RadioPlayer {
         }
       });
       await AudioPlayer.initialize({ audioId: AUDIO_ID });
+      this.loadedSource = url;
       this.created = true;
-    })();
+    })().finally(() => {
+      this.creating = null;
+    });
     return this.creating;
+  }
+
+  async warmUp(url: string, meta: PlayerMeta): Promise<void> {
+    if (this.currentUrl === url) return;
+    const seq = ++this.warmSeq;
+    const source = await resolveStreamUrl(url);
+    if (this.currentUrl || seq !== this.warmSeq) return;
+
+    return this.enqueue(async () => {
+      if (this.currentUrl || seq !== this.warmSeq) return;
+      try {
+        this.suppressPauseEvents(2500);
+        if (!this.created) {
+          await this.ensureCreated(source, meta);
+        } else if (this.loadedSource !== source) {
+          await AudioPlayer.stop({ audioId: AUDIO_ID }).catch(() => {});
+          if (this.currentUrl || seq !== this.warmSeq) return;
+          await AudioPlayer.changeAudioSource({ audioId: AUDIO_ID, source });
+          this.loadedSource = source;
+          await AudioPlayer.changeMetadata({
+            audioId: AUDIO_ID,
+            friendlyTitle: meta.title,
+            artistName: meta.subtitle,
+          }).catch(() => {});
+        }
+        await AudioPlayer.setVolume({ audioId: AUDIO_ID, volume: this.volume }).catch(() => {});
+      } catch {
+        // Warm-up is best effort. A later explicit play() will report real failures.
+      }
+    });
   }
 
   async play(url: string, meta: PlayerMeta): Promise<void> {
     // 同步占位：后续 play/stop 据此判断自己是否已被更晚的切台抢占。
+    const hadActiveSource = this.currentUrl !== null;
     const seq = ++this.requestSeq;
     this.currentUrl = url;
     this.clearReadyTimer();
@@ -243,7 +291,7 @@ export class NativePlayer implements RadioPlayer {
     this.clearStallTimer();
     // create/initialize/changeSource 都会产生内部 paused 状态，不能当成用户暂停。
     this.suppressPauseEvents(2500);
-    if (this.created) {
+    if (this.created && hadActiveSource) {
       this.suppressPauseEvents();
       // 先尽快停掉旧声源，再进入串行换源流程，避免快速切台时旧声音继续播。
       void AudioPlayer.stop({ audioId: AUDIO_ID }).catch(() => {});
@@ -256,11 +304,12 @@ export class NativePlayer implements RadioPlayer {
       try {
         if (!this.created) {
           await this.ensureCreated(source, meta);
-        } else {
+        } else if (this.loadedSource !== source) {
           this.suppressPauseEvents();
           await AudioPlayer.stop({ audioId: AUDIO_ID }).catch(() => {});
           if (!this.isCurrentRequest(url, seq)) return; // stop 期间被抢占
           await AudioPlayer.changeAudioSource({ audioId: AUDIO_ID, source });
+          this.loadedSource = source;
           if (!this.isCurrentRequest(url, seq)) return; // 换源期间被抢占
           // changeMetadata 仅更新通知栏标题，是装饰性操作。插件在切台竞态下
           // 偶发 NPE（getCurrentMediaItem() 为 null）；绝不能让它冒泡到外层 catch，

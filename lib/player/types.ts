@@ -16,6 +16,7 @@ export type PlayerHandlers = {
 };
 
 export interface RadioPlayer {
+  warmUp(url: string, meta: PlayerMeta): Promise<void>;
   play(url: string, meta: PlayerMeta): Promise<void>;
   stop(): void;
   setVolume(v: number): void;
