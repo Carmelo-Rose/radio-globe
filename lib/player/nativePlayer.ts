@@ -3,8 +3,20 @@ import { CapacitorHttp } from "@capacitor/core";
 import type { PlayerHandlers, PlayerMeta, RadioPlayer } from "./types";
 
 const AUDIO_ID = "radio-globe-stream";
-// 直播流缓冲可能较慢；只在确实没在播时才报错，避免误报"播放失败"。
-const READY_TIMEOUT = 20000;
+// 兜底超时：超过这个时间播放位置仍未推进，判定连不上 → 报失败并跳台。
+// 取 12s：给慢流足够缓冲时间，又不至于让用户对着死台干等太久。
+const READY_TIMEOUT = 12000;
+// 判定"真的在播"的位置阈值：采样窗口内推进超过这个秒数即视为仍在出声。
+const PROGRESS_THRESHOLD = 0.3;
+const PROGRESS_SAMPLE_MS = 1200;
+const STALL_CHECK_INTERVAL = 18000;
+// onAudioEnd 宽限期：直播流的"结束"多为缓冲中断/不连续，ExoPlayer 通常会自行恢复。
+// 等这段时间再核实是否真没在播，避免一掉线就闪"播放失败"。
+const END_GRACE = 6000;
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * 预解析 0472 中转地址。
@@ -60,6 +72,8 @@ export class NativePlayer implements RadioPlayer {
   private currentUrl: string | null = null;
   private volume = 1;
   private readyTimer: ReturnType<typeof setTimeout> | null = null;
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
+  private stallTimer: ReturnType<typeof setTimeout> | null = null;
   private requestSeq = 0;
   private suppressPauseEventsUntil = 0;
   // 串行化原生操作：连续切台时多个 play() 并发会让 changeAudioSource 乱序，
@@ -79,6 +93,46 @@ export class NativePlayer implements RadioPlayer {
     }
   }
 
+  private clearGraceTimer() {
+    if (this.graceTimer) {
+      clearTimeout(this.graceTimer);
+      this.graceTimer = null;
+    }
+  }
+
+  private clearStallTimer() {
+    if (this.stallTimer) {
+      clearTimeout(this.stallTimer);
+      this.stallTimer = null;
+    }
+  }
+
+  private markPlaying(url?: string, seq?: number) {
+    if (url && seq && !this.isCurrentRequest(url, seq)) return;
+    this.clearReadyTimer();
+    this.clearGraceTimer();
+    this.handlers.onPlaying?.();
+    if (this.currentUrl) this.armStallTimer(this.currentUrl, this.requestSeq);
+  }
+
+  /**
+   * 延迟核实播放是否真的失败：等 delay 后查询 isPlaying，
+   * 在播 → 清错误；否则 → 报失败。期间收到 'playing' 状态会取消本检查，
+   * 因此直播流的瞬时掉线/缓冲不会误报"播放失败"。
+   */
+  private scheduleGraceFailCheck(url: string, delay: number) {
+    this.clearGraceTimer();
+    this.graceTimer = setTimeout(async () => {
+      this.graceTimer = null;
+      if (this.currentUrl !== url) return;
+      if (await this.isPlaybackAdvancing()) {
+        if (this.currentUrl === url) this.markPlaying();
+        return;
+      }
+      if (this.currentUrl === url) void this.reportFailure(url);
+    }, delay);
+  }
+
   private suppressPauseEvents(ms = 1500) {
     this.suppressPauseEventsUntil = Math.max(this.suppressPauseEventsUntil, Date.now() + ms);
   }
@@ -94,21 +148,53 @@ export class NativePlayer implements RadioPlayer {
     this.handlers.onError?.(offline ? "offline" : "error");
   }
 
+  /**
+   * 播放位置是否在继续推进。
+   * 只看 currentTime > 0 会把只播完一个旧分片的冻结 HLS 误判为正常。
+   */
+  private async isPlaybackAdvancing(): Promise<boolean> {
+    try {
+      const start = await AudioPlayer.getCurrentTime({ audioId: AUDIO_ID });
+      await wait(PROGRESS_SAMPLE_MS);
+      const end = await AudioPlayer.getCurrentTime({ audioId: AUDIO_ID });
+      if (end.currentTime - start.currentTime > PROGRESS_THRESHOLD) return true;
+    } catch {
+      /* ignore */
+    }
+    // getCurrentTime 不可用时退回 isPlaying。
+    try {
+      const { isPlaying } = await AudioPlayer.isPlaying({ audioId: AUDIO_ID });
+      return isPlaying;
+    } catch {
+      return false;
+    }
+  }
+
   private armReadyTimer(url: string, seq: number) {
     this.clearReadyTimer();
     this.readyTimer = setTimeout(async () => {
       if (!this.isCurrentRequest(url, seq)) return;
-      try {
-        const { isPlaying } = await AudioPlayer.isPlaying({ audioId: AUDIO_ID });
-        if (isPlaying) {
-          this.handlers.onPlaying?.();
-          return;
-        }
-      } catch {
-        /* fall through to failure */
+      // 用"播放位置是否推进"判定：ExoPlayer 卡在缓冲(连不上)时位置一直为 0，
+      // 或播完旧分片后停住时 isPlaying/currentTime 可能骗过兜底；必须采样是否继续前进。
+      if (await this.isPlaybackAdvancing()) {
+        if (this.isCurrentRequest(url, seq)) this.markPlaying(url, seq);
+        return;
       }
       if (this.isCurrentRequest(url, seq)) void this.reportFailure(url);
     }, READY_TIMEOUT);
+  }
+
+  private armStallTimer(url: string, seq: number) {
+    this.clearStallTimer();
+    this.stallTimer = setTimeout(async () => {
+      this.stallTimer = null;
+      if (!this.isCurrentRequest(url, seq)) return;
+      if (await this.isPlaybackAdvancing()) {
+        if (this.isCurrentRequest(url, seq)) this.armStallTimer(url, seq);
+        return;
+      }
+      if (this.isCurrentRequest(url, seq)) void this.reportFailure(url);
+    }, STALL_CHECK_INTERVAL);
   }
 
   private ensureCreated(url: string, meta: PlayerMeta): Promise<void> {
@@ -125,18 +211,18 @@ export class NativePlayer implements RadioPlayer {
         showSeekForward: false,
       });
       await AudioPlayer.onAudioReady({ audioId: AUDIO_ID }, () => {
-        this.clearReadyTimer();
-        this.handlers.onPlaying?.();
+        this.markPlaying();
       });
       await AudioPlayer.onAudioEnd({ audioId: AUDIO_ID }, () => {
-        if (this.currentUrl) void this.reportFailure(this.currentUrl);
+        // 不即时判失败：直播流的 onAudioEnd 多为缓冲中断，给宽限期再核实，
+        // 期间若恢复播放('playing')会取消该检查。真·死流则宽限后报失败。
+        if (this.currentUrl) this.scheduleGraceFailCheck(this.currentUrl, END_GRACE);
       });
       await AudioPlayer.onPlaybackStatusChange({ audioId: AUDIO_ID }, ({ status }) => {
         // 'playing' 是最可靠的"已开始播放"信号：用它清除任何残留的错误标记
         // （插件无 error 回调，否则音频在播但 UI 仍卡在"播放失败"）。
         if (status === "playing") {
-          this.clearReadyTimer();
-          this.handlers.onPlaying?.();
+          this.markPlaying();
         } else if (status === "paused" && Date.now() > this.suppressPauseEventsUntil) {
           // 来自通知栏/锁屏的暂停
           this.handlers.onRemotePause?.();
@@ -153,6 +239,8 @@ export class NativePlayer implements RadioPlayer {
     const seq = ++this.requestSeq;
     this.currentUrl = url;
     this.clearReadyTimer();
+    this.clearGraceTimer();
+    this.clearStallTimer();
     // create/initialize/changeSource 都会产生内部 paused 状态，不能当成用户暂停。
     this.suppressPauseEvents(2500);
     if (this.created) {
@@ -197,6 +285,8 @@ export class NativePlayer implements RadioPlayer {
   stop(): void {
     this.requestSeq++;
     this.clearReadyTimer();
+    this.clearGraceTimer();
+    this.clearStallTimer();
     this.currentUrl = null; // 让队列中待执行的 play() 立即作废
     if (this.created) {
       this.suppressPauseEvents();
@@ -219,6 +309,8 @@ export class NativePlayer implements RadioPlayer {
 
   dispose(): void {
     this.clearReadyTimer();
+    this.clearGraceTimer();
+    this.clearStallTimer();
     this.requestSeq++;
     this.currentUrl = null;
     if (this.created) {

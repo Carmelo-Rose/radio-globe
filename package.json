@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "check:china-radio-health": "node scripts/check-china-radio-health.mjs",
+    "check:china-radio-unstable": "node scripts/check-china-radio-health.mjs --health-status unstable",
     "build:native": "node scripts/build-native.mjs"
   },
   "dependencies": {

@@ -2,6 +2,7 @@ import type { Station } from "./stations";
 // cnGeo 的 matchCity/matchProvince 等已移入 chinaRadioData.ts 的生成脚本中，
 // 静态数据已包含坐标，运行时不再需要 cnGeo。
 import { CHINA_RADIO_STATIONS } from "./chinaRadioData";
+import { filterHiddenChinaStations } from "./chinaRadioHealth";
 
 export type ApiStation = {
   stationuuid: string;
@@ -196,7 +197,7 @@ export async function fetchStationsNearby(
  * @see lib/chinaRadioData.ts — 静态数据文件
  */
 export async function fetchChinaStations(): Promise<Station[]> {
-  return CHINA_RADIO_STATIONS;
+  return filterHiddenChinaStations(CHINA_RADIO_STATIONS);
 }
 
 // ---------- Timezone approximation ----------

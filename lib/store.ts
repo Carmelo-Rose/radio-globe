@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { BOOTSTRAP_STATIONS, type Station } from "./stations";
 import { fetchAllStationsPages, fetchChinaStations, toStation, isBlockedStream } from "./radioApi";
+import { filterHiddenChinaStations, isChinaRadioStationHidden } from "./chinaRadioHealth";
 
 const CACHE_KEY = "radio_stations_cache";
 const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
@@ -108,7 +109,11 @@ function loadFavorites(): Set<string> {
     if (!raw) return new Set();
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return new Set();
-    return new Set(parsed.filter((v): v is string => typeof v === "string"));
+    return new Set(
+      parsed.filter(
+        (v): v is string => typeof v === "string" && !isChinaRadioStationHidden(v)
+      )
+    );
   } catch {
     return new Set();
   }
@@ -249,7 +254,12 @@ export const useRadio = create<RadioState>((set, get) => ({
     // 1. Load cached data first (instant)。过滤黑名单：旧缓存可能含已拉黑的死台，
     // 且合并逻辑只增不删，不在此剔除会让死台随缓存永久留存。
     const cachedRaw = await loadCachedStations();
-    const cached = cachedRaw?.filter((s) => !(s.streamUrl && isBlockedStream(s.streamUrl))) ?? null;
+    const cached =
+      cachedRaw
+        ? filterHiddenChinaStations(
+            cachedRaw.filter((s) => !(s.streamUrl && isBlockedStream(s.streamUrl)))
+          )
+        : null;
     // 合并而非替换：bootstrap 兜底台已先占位（stations.length>0），
     // 不能再用 length===0 拦截，否则缓存的几千个台永远加载不进来、地球只剩几颗点。
     if (cached && cached.length > 0) {

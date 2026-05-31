@@ -28,7 +28,7 @@ export default function AudioEngine() {
     autoSkipRef.current = setTimeout(() => {
       autoSkipRef.current = null;
       useRadio.getState().next();
-    }, 5000);
+    }, 2500);
   }, [clearAutoSkip]);
 
   // Resolve the platform player once and wire its events to the store.

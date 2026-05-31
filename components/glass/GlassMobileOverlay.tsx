@@ -212,6 +212,8 @@ function MNowPlaying() {
   const prev = useRadio((s) => s.prev);
   const favorites = useRadio((s) => s.favorites);
   const toggleFavorite = useRadio((s) => s.toggleFavorite);
+  const isPinned = useRadio((s) => s.isPinned);
+  const togglePin = useRadio((s) => s.togglePin);
 
   const isFav = station ? favorites.has(station.id) : false;
   const status = playbackError ? playbackError.message.toUpperCase() : isPlaying ? "LIVE" : "PAUSED";
@@ -243,6 +245,13 @@ function MNowPlaying() {
             {station ? `${station.genre || "RADIO"} · ● ${status}` : "正在获取电台数据"}
           </div>
         </div>
+        <button
+          onClick={togglePin}
+          aria-label={isPinned ? "取消固定" : "固定电台"}
+          style={{ all: "unset", cursor: "pointer", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", color: isPinned ? GLASS.accent : GLASS.dim, flexShrink: 0 }}
+        >
+          <GlassIcon name={isPinned ? "pin-f" : "pin"} size={18} />
+        </button>
         <button
           onClick={() => station && toggleFavorite(station.id)}
           aria-label="收藏"
@@ -293,8 +302,8 @@ function MTabBar() {
   const items = [
     { k: "explore", ico: "globe", label: "探索" },
     { k: "favs", ico: "heart", label: "收藏" },
-    { k: "browse", ico: "map", label: "浏览" },
     { k: "search", ico: "search", label: "搜索" },
+    { k: "browse", ico: "map", label: "浏览" },
     { k: "me", ico: "profile", label: "我" },
   ];
   const [active, setActive] = useState("explore");

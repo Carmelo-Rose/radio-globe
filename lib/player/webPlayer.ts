@@ -2,6 +2,13 @@ import Hls from "hls.js";
 import type { PlayerHandlers, PlayerMeta, RadioPlayer } from "./types";
 
 const MAX_RETRIES = 3;
+const PROGRESS_THRESHOLD = 0.3;
+const PROGRESS_SAMPLE_MS = 1200;
+const STALL_CHECK_INTERVAL = 18000;
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function isAutoplayBlocked(err: unknown): boolean {
   return err instanceof DOMException && err.name === "NotAllowedError";
@@ -49,6 +56,7 @@ export class WebPlayer implements RadioPlayer {
   private currentUrl: string | null = null;
   private markFailedRunning = false;
   private volume = 1;
+  private stallTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.audio = new Audio();
@@ -76,6 +84,7 @@ export class WebPlayer implements RadioPlayer {
 
   private async markFailed(streamUrl: string) {
     if (this.markFailedRunning) return;
+    this.clearStallTimer();
     this.markFailedRunning = true;
     const offline = await checkOffline(streamUrl);
     this.markFailedRunning = false;
@@ -86,6 +95,41 @@ export class WebPlayer implements RadioPlayer {
   private destroyHls() {
     this.hls?.destroy();
     this.hls = null;
+  }
+
+  private clearStallTimer() {
+    if (this.stallTimer) {
+      clearTimeout(this.stallTimer);
+      this.stallTimer = null;
+    }
+  }
+
+  private async isPlaybackAdvancing(): Promise<boolean> {
+    if (this.audio.paused || this.audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return false;
+    }
+    const start = this.audio.currentTime;
+    await wait(PROGRESS_SAMPLE_MS);
+    return this.audio.currentTime - start > PROGRESS_THRESHOLD;
+  }
+
+  private armStallTimer(url: string) {
+    this.clearStallTimer();
+    this.stallTimer = setTimeout(async () => {
+      this.stallTimer = null;
+      if (this.currentUrl !== url) return;
+      if (await this.isPlaybackAdvancing()) {
+        if (this.currentUrl === url) this.armStallTimer(url);
+        return;
+      }
+      if (this.currentUrl === url) void this.markFailed(url);
+    }, STALL_CHECK_INTERVAL);
+  }
+
+  private markPlaying(url: string) {
+    if (this.currentUrl !== url) return;
+    this.handlers.onPlaying?.();
+    this.armStallTimer(url);
   }
 
   private startHls(url: string) {
@@ -106,7 +150,7 @@ export class WebPlayer implements RadioPlayer {
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       this.retries = 0;
       safePlay(this.audio).then(
-        () => this.handlers.onPlaying?.(),
+        () => this.markPlaying(url),
         () => this.handlers.onError?.("error")
       );
     });
@@ -134,6 +178,7 @@ export class WebPlayer implements RadioPlayer {
     this.currentUrl = url;
     this.retries = 0;
     this.markFailedRunning = false;
+    this.clearStallTimer();
     this.audio.volume = this.volume;
 
     // 0472 中转地址（radio.0472.org/?id=N）无 .m3u8 扩展名，但 302 跳转后是 HLS。
@@ -147,7 +192,7 @@ export class WebPlayer implements RadioPlayer {
     this.audio.src = `/api/stream?url=${encodeURIComponent(url)}`;
     try {
       await safePlay(this.audio);
-      this.handlers.onPlaying?.();
+      this.markPlaying(url);
     } catch {
       this.handlers.onError?.("error");
     }
@@ -158,6 +203,7 @@ export class WebPlayer implements RadioPlayer {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    this.clearStallTimer();
     this.currentUrl = null;
     this.audio.pause();
     this.audio.src = "";
