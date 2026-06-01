@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRadio } from "@/lib/store";
 import { nearbyStations } from "@/lib/geo";
 import { mapBridge } from "@/lib/mapBridge";
@@ -202,6 +202,138 @@ function MNearbyChips() {
   );
 }
 
+// ---- Sleep timer button + popover -------------------------------------------
+const SLEEP_OPTIONS = [15, 30, 45, 60, 90];
+
+function MSleepButton() {
+  const sleepUntil = useRadio((s) => s.sleepUntil);
+  const setSleepTimer = useRadio((s) => s.setSleepTimer);
+  const [open, setOpen] = useState(false);
+  const [remain, setRemain] = useState("");
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // 倒计时显示（mm:ss），每秒刷新
+  useEffect(() => {
+    if (!sleepUntil) {
+      setRemain("");
+      return;
+    }
+    const tick = () => {
+      const ms = sleepUntil - Date.now();
+      if (ms <= 0) {
+        setRemain("");
+        return;
+      }
+      const m = Math.floor(ms / 60000);
+      const s = Math.floor((ms % 60000) / 1000);
+      setRemain(`${m}:${String(s).padStart(2, "0")}`);
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [sleepUntil]);
+
+  // 点击外部关闭弹层
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const active = sleepUntil != null;
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-label="睡眠定时器"
+        style={{
+          all: "unset",
+          cursor: "pointer",
+          height: 36,
+          minWidth: 36,
+          padding: active ? "0 10px" : 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 5,
+          borderRadius: 18,
+          color: active ? "#0e1216" : GLASS.dim,
+          background: active ? GLASS.accent : "transparent",
+        }}
+      >
+        <GlassIcon name="clock" size={18} />
+        {active && remain && (
+          <span style={{ font: `500 11px/1 ${FONT_MONO}`, letterSpacing: "0.04em" }}>{remain}</span>
+        )}
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 44,
+            right: 0,
+            ...glassPanel,
+            borderRadius: 14,
+            padding: 6,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            minWidth: 132,
+            zIndex: 30,
+          }}
+        >
+          <div style={{ font: `300 10px/1 ${FONT_MONO}`, color: GLASS.faint, letterSpacing: "0.12em", padding: "6px 10px 4px" }}>
+            睡眠定时
+          </div>
+          {SLEEP_OPTIONS.map((m) => (
+            <button
+              key={m}
+              onClick={() => {
+                setSleepTimer(m);
+                setOpen(false);
+              }}
+              style={{
+                all: "unset",
+                cursor: "pointer",
+                padding: "9px 10px",
+                borderRadius: 9,
+                font: `400 13px/1 ${FONT_SANS}`,
+                color: GLASS.ink,
+              }}
+            >
+              {m} 分钟后停止
+            </button>
+          ))}
+          {active && (
+            <button
+              onClick={() => {
+                setSleepTimer(null);
+                setOpen(false);
+              }}
+              style={{
+                all: "unset",
+                cursor: "pointer",
+                padding: "9px 10px",
+                borderRadius: 9,
+                marginTop: 2,
+                borderTop: "1px solid rgba(255,255,255,0.08)",
+                font: `400 13px/1 ${FONT_SANS}`,
+                color: GLASS.accent,
+              }}
+            >
+              取消定时
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- Now playing card -------------------------------------------------------
 function MNowPlaying() {
   const station = useRadio((s) => s.stationMap.get(s.currentStationId ?? ""));
@@ -245,6 +377,7 @@ function MNowPlaying() {
             {station ? `${station.genre || "电台"} · ● ${status}` : "正在获取电台数据"}
           </div>
         </div>
+        <MSleepButton />
         <button
           onClick={togglePin}
           aria-label={isPinned ? "取消固定" : "固定电台"}

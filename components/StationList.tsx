@@ -12,6 +12,8 @@ export default function StationList() {
   const currentStationId = useRadio((s) => s.currentStationId);
   const favorites = useRadio((s) => s.favorites);
   const stations = useRadio((s) => s.stations);
+  const stationMap = useRadio((s) => s.stationMap);
+  const recentStationIds = useRadio((s) => s.recentStationIds);
   const listFilter = useRadio((s) => s.listFilter);
   const favoritesOnly = listFilter === "favorites";
 
@@ -47,6 +49,14 @@ export default function StationList() {
   const visible = filtered.slice(0, PAGE_SIZE);
   const hasMore = filtered.length > PAGE_SIZE;
 
+  // 最近收听：仅在「所有电台」视图、未搜索时显示。按 recentStationIds 顺序解析出存在的台。
+  const recentStations = useMemo(() => {
+    if (favoritesOnly || debounced) return [];
+    return recentStationIds
+      .map((id) => stationMap.get(id))
+      .filter((s): s is NonNullable<typeof s> => s != null);
+  }, [recentStationIds, stationMap, favoritesOnly, debounced]);
+
   const handleSelect = useCallback(
     (id: string) => {
       setCurrent(id, "select");
@@ -78,6 +88,27 @@ export default function StationList() {
           onChange={(e) => setQuery(e.target.value)}
         />
         <div className="list-scroll">
+          {recentStations.length > 0 && (
+            <>
+              <div className="list-section">最近收听</div>
+              {recentStations.map((s) => (
+                <button
+                  key={`recent-${s.id}`}
+                  className={`list-item${s.id === currentStationId ? " active" : ""}`}
+                  onClick={() => handleSelect(s.id)}
+                >
+                  <span>
+                    <span className="li-name">{s.name}</span>
+                    <span className="li-city">
+                      {s.city} · {s.country} · {s.genre}
+                    </span>
+                  </span>
+                  {favorites.has(s.id) && <span className="li-star">★</span>}
+                </button>
+              ))}
+              <div className="list-section">全部电台</div>
+            </>
+          )}
           {visible.map((s) => (
             <button
               key={s.id}

@@ -6,6 +6,8 @@ import { filterHiddenChinaStations, isChinaRadioStationHidden } from "./chinaRad
 
 const CACHE_KEY = "radio_stations_cache";
 const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
+const RECENT_KEY = "radio_recent";
+const RECENT_LIMIT = 20;
 
 type RadioState = {
   currentStationId: string | null;
@@ -27,6 +29,10 @@ type RadioState = {
   loadProgress: string;
   playbackError: PlaybackError | null;
   isPinned: boolean;
+  // 睡眠定时器：到点自动停止播放。sleepUntil 为目标时间戳(ms)，null 表示未设置。
+  sleepUntil: number | null;
+  // 最近收听：电台 id 列表，最近在前，去重，上限 RECENT_LIMIT。
+  recentStationIds: string[];
 
   setCurrent: (id: string | null, source: "tune" | "select") => void;
   seedBootstrapStations: () => void;
@@ -42,6 +48,8 @@ type RadioState = {
   getStation: (id: string) => Station | undefined;
   setPlaybackError: (msg: PlaybackError | null) => void;
   togglePin: () => void;
+  // 设置/取消睡眠定时器。minutes 为分钟数，传 0 或 null 取消。
+  setSleepTimer: (minutes: number | null) => void;
 };
 
 type PlaybackError = {
@@ -121,6 +129,26 @@ function loadFavorites(): Set<string> {
   }
 }
 
+function loadRecent(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((v): v is string => typeof v === "string" && !isChinaRadioStationHidden(v))
+      .slice(0, RECENT_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+// 把一个台 id 推入最近列表（去重、置顶、截断）。返回新数组。
+function pushRecent(list: string[], id: string): string[] {
+  return [id, ...list.filter((x) => x !== id)].slice(0, RECENT_LIMIT);
+}
+
 // ---------- Store ----------
 
 function applyStations(prev: RadioState, stations: Station[]): Partial<RadioState> {
@@ -168,6 +196,9 @@ function seedGlobalFallbackPatch(prev: RadioState): Partial<RadioState> {
   };
 }
 
+// 睡眠定时器句柄（module 级，跨 set 调用持有）。
+let sleepTimerHandle: ReturnType<typeof setTimeout> | null = null;
+
 export const useRadio = create<RadioState>((set, get) => ({
   currentStationId: null,
   hasStarted: false,
@@ -186,6 +217,8 @@ export const useRadio = create<RadioState>((set, get) => ({
   loadProgress: "",
   playbackError: null,
   isPinned: false,
+  sleepUntil: null,
+  recentStationIds: loadRecent(),
 
   setCurrent: (id, source) => {
     const prev = get();
@@ -205,6 +238,7 @@ export const useRadio = create<RadioState>((set, get) => ({
       lastChange: source,
       isPlaying: prev.hasStarted,
       playbackError: null,
+      recentStationIds: id ? pushRecent(prev.recentStationIds, id) : prev.recentStationIds,
     });
   },
 
@@ -225,6 +259,10 @@ export const useRadio = create<RadioState>((set, get) => ({
         hasStarted: true,
         isPlaying: Boolean(currentStationId && stationMap.get(currentStationId)?.streamUrl),
         playbackError: null,
+        // 落地兜底台由 bootstrap 直接设定、未经 setCurrent，这里补记一次到最近收听。
+        recentStationIds: currentStationId
+          ? pushRecent(prev.recentStationIds, currentStationId)
+          : prev.recentStationIds,
       };
     });
   },
@@ -244,13 +282,14 @@ export const useRadio = create<RadioState>((set, get) => ({
     const nextIdx = i < 0 ? 0 : (i + 1) % stations.length;
     const id = stations[nextIdx].id;
     if (id === currentStationId) return;
-    set({
+    set((s) => ({
       currentStationId: id,
       lastChange: "select",
       hasStarted: true,
       isPlaying: true,
       playbackError: null,
-    });
+      recentStationIds: pushRecent(s.recentStationIds, id),
+    }));
   },
 
   prev: () => {
@@ -260,13 +299,14 @@ export const useRadio = create<RadioState>((set, get) => ({
     const prevIdx = i < 0 ? stations.length - 1 : (i - 1 + stations.length) % stations.length;
     const id = stations[prevIdx].id;
     if (id === currentStationId) return;
-    set({
+    set((s) => ({
       currentStationId: id,
       lastChange: "select",
       hasStarted: true,
       isPlaying: true,
       playbackError: null,
-    });
+      recentStationIds: pushRecent(s.recentStationIds, id),
+    }));
   },
 
   toggleFavorite: (id) =>
@@ -285,6 +325,23 @@ export const useRadio = create<RadioState>((set, get) => ({
   setPlaybackError: (msg) => set({ playbackError: msg }),
 
   togglePin: () => set((s) => ({ isPinned: !s.isPinned })),
+
+  setSleepTimer: (minutes) => {
+    if (sleepTimerHandle) {
+      clearTimeout(sleepTimerHandle);
+      sleepTimerHandle = null;
+    }
+    if (!minutes || minutes <= 0) {
+      set({ sleepUntil: null });
+      return;
+    }
+    const until = Date.now() + minutes * 60 * 1000;
+    set({ sleepUntil: until });
+    sleepTimerHandle = setTimeout(() => {
+      sleepTimerHandle = null;
+      set({ sleepUntil: null, isPlaying: false });
+    }, minutes * 60 * 1000);
+  },
 
   fetchAll: async () => {
     if (get().isLoading) return;
@@ -399,11 +456,20 @@ export const useRadio = create<RadioState>((set, get) => ({
 // Persist favorites to localStorage
 if (typeof window !== "undefined") {
   let prevFavs = useRadio.getState().favorites;
+  let prevRecent = useRadio.getState().recentStationIds;
   useRadio.subscribe((state) => {
     if (state.favorites !== prevFavs) {
       prevFavs = state.favorites;
       try {
         localStorage.setItem("radio_favorites", JSON.stringify([...state.favorites]));
+      } catch {
+        // QuotaExceededError — ignore
+      }
+    }
+    if (state.recentStationIds !== prevRecent) {
+      prevRecent = state.recentStationIds;
+      try {
+        localStorage.setItem(RECENT_KEY, JSON.stringify(state.recentStationIds));
       } catch {
         // QuotaExceededError — ignore
       }
