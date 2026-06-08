@@ -210,7 +210,17 @@ function MSleepButton() {
   const setSleepTimer = useRadio((s) => s.setSleepTimer);
   const [open, setOpen] = useState(false);
   const [remain, setRemain] = useState("");
+  const [custom, setCustom] = useState("");
   const wrapRef = useRef<HTMLDivElement>(null);
+
+  const applyCustom = () => {
+    const n = parseInt(custom, 10);
+    if (Number.isFinite(n) && n > 0) {
+      setSleepTimer(n);
+      setCustom("");
+      setOpen(false);
+    }
+  };
 
   // 倒计时显示（mm:ss），每秒刷新
   useEffect(() => {
@@ -308,6 +318,51 @@ function MSleepButton() {
               {m} 分钟后停止
             </button>
           ))}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "8px 8px 4px",
+              marginTop: 2,
+              borderTop: "1px solid rgba(255,255,255,0.08)",
+            }}
+          >
+            <input
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && applyCustom()}
+              placeholder="自定义"
+              style={{
+                all: "unset",
+                width: 52,
+                padding: "8px 9px",
+                borderRadius: 8,
+                background: "rgba(255,255,255,0.06)",
+                font: `400 13px/1 ${FONT_SANS}`,
+                color: GLASS.ink,
+              }}
+            />
+            <span style={{ font: `300 11px/1 ${FONT_MONO}`, color: GLASS.faint }}>分钟</span>
+            <button
+              onClick={applyCustom}
+              style={{
+                all: "unset",
+                cursor: "pointer",
+                marginLeft: "auto",
+                padding: "8px 12px",
+                borderRadius: 8,
+                font: `500 12px/1 ${FONT_SANS}`,
+                color: "#0e1216",
+                background: GLASS.accent,
+              }}
+            >
+              确定
+            </button>
+          </div>
           {active && (
             <button
               onClick={() => {
@@ -433,13 +488,11 @@ function MTabBar() {
   const setShowList = useRadio((s) => s.setShowList);
   const openList = useRadio((s) => s.openList);
   const items = [
-    { k: "explore", ico: "globe", label: "探索" },
     { k: "favs", ico: "heart", label: "收藏" },
     { k: "search", ico: "search", label: "搜索" },
-    { k: "browse", ico: "map", label: "浏览" },
     { k: "me", ico: "profile", label: "我" },
   ];
-  const [active, setActive] = useState("explore");
+  const [active, setActive] = useState("favs");
   return (
     <div
       style={{
