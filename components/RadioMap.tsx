@@ -110,11 +110,16 @@ export default function RadioMap() {
     if (!containerRef.current || mapRef.current) return;
     let mounted = true;
 
+    // 2.2 在桌面宽屏(~1280px)刚好能看到整个地球；窄屏(手机)横向更窄，
+    // 同样 zoom 下地球更大，需要更小的 minZoom 才能缩到看见整球。按宽度换算。
+    const fitMinZoom = (w: number) =>
+      Math.max(0, Math.min(2.2, 2.2 - Math.log2(1280 / Math.max(w, 1))));
+
     const map = new maplibregl.Map({
       container: containerRef.current,
       center: [118.8, 32.1],
       zoom: 3.2,
-      minZoom: 2.2,
+      minZoom: fitMinZoom(window.innerWidth),
       maxZoom: 18,
       pitch: 0,
       attributionControl: { compact: true },
@@ -324,8 +329,13 @@ export default function RadioMap() {
       }
     });
 
+    // 屏幕尺寸/旋转变化时重新计算缩放下限。
+    const onResize = () => map.setMinZoom(fitMinZoom(window.innerWidth));
+    window.addEventListener("resize", onResize);
+
     return () => {
       mounted = false;
+      window.removeEventListener("resize", onResize);
       if (snapFrameRef.current != null) cancelAnimationFrame(snapFrameRef.current);
       if (flyToTimerRef.current) clearTimeout(flyToTimerRef.current);
       map.remove();
