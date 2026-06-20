@@ -29,23 +29,47 @@
 
 ### 电脑 / 其他设备
 
-Web 版开发中，敬请期待 🚧
+需要 Node.js 22+ 和 npm 10+。
+
+```bash
+git clone https://github.com/Carmelo-Rose/radio-globe.git
+cd radio-globe
+npm install
+npm run dev
+```
+
+浏览器打开 `http://localhost:3000` 即可体验。
+
+构建静态版：
+
+```bash
+npm run build
+```
+
+输出到 `out/` 目录，可部署到任意静态托管服务。
 
 ---
 
-## 🎧 使用小贴士
+## 🛠️ 技术栈
 
-- **找电台**：转动地球，绿点就是电台，点击即可播放
-- **搜电台**：点右下角搜索按钮，按名字或城市搜索
-- **收藏**：播放时点心形按钮收藏
-- **切台**：点播放器上的 ⏮ ⏭ 切换上/下一个电台
-- **定时关闭**：点播放器上的时钟图标，选择停止时间
+| 层 | 技术 |
+|---|---|
+| 前端框架 | Next.js 15 · React 19 · TypeScript |
+| 状态管理 | Zustand |
+| 地图引擎 | MapLibre GL JS 5 |
+| 音频播放 | hls.js (Web) · @mediagrid/capacitor-native-audio (原生) |
+| 原生壳 | Capacitor 8 (Android + iOS) |
 
----
+## 📁 项目结构
 
-## 💬 反馈
-
-遇到问题或有建议？欢迎提 [Issue](https://github.com/Carmelo-Rose/radio-globe/issues)。
+```
+app/                  # Next.js 页面
+components/           # UI 组件（地图、播放器、列表）
+lib/                  # 核心逻辑（状态管理、API、地理计算）
+scripts/              # 构建脚本
+android/              # Android 工程
+ios/                  # iOS 工程
+```
 
 ---
 
